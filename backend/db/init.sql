@@ -1,0 +1,30 @@
+-- Enable UUID generation
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Users Table
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Devices Table
+CREATE TABLE devices (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Telemetry Data Table
+CREATE TABLE telemetry (
+    timestamp TIMESTAMPTZ NOT NULL,
+    device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    energy_usage FLOAT NOT NULL,
+    PRIMARY KEY (timestamp, device_id)
+);
+
+-- Index to speed up time-series queries for specific devices
+CREATE INDEX idx_telemetry_device_id_timestamp ON telemetry (device_id, timestamp DESC);
