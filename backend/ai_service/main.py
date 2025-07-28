@@ -2,11 +2,13 @@ import os
 import psycopg2
 import httpx
 import json
+import traceback  # <-- ADD THIS IMPORT
 from fastapi import FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from typing import List, Optional, Literal
 
+# Load environment variables
 load_dotenv()
 
 class QueryRequest(BaseModel):
@@ -33,7 +35,6 @@ def get_db_connection():
     )
     return conn
 
-# System Prompt
 SYSTEM_PROMPT = """
 You are a smart home data analyst. Your job is to take a user's question and convert it into a structured JSON object.
 You must only respond with JSON. The JSON object must conform to the following Pydantic models:
@@ -63,7 +64,6 @@ def read_root():
 
 @app.post("/ai/query")
 async def handle_query(query: QueryRequest):
-    # 1. Call LLM to transform question into structured JSON
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -72,25 +72,25 @@ async def handle_query(query: QueryRequest):
                     "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"
                 },
                 json={
-                    "model": "deepseek/deepseek-coder-v2-lite-instruct",
+                    "model": "mistralai/mistral-7b-instruct-v0.2",
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": query.question}
                     ],
                     "response_format": {"type": "json_object"}
-                }
+                },
+                timeout=30.0 # Add a timeout
             )
             response.raise_for_status()
             llm_output_str = response.json()['choices'][0]['message']['content']
             llm_data = json.loads(llm_output_str)
             
-            # 2. Validate the LLM's output with Pydantic
             validated_llm_response = LLMResponse.model_validate(llm_data)
 
     except (httpx.HTTPStatusError, json.JSONDecodeError, Exception) as e:
+        traceback.print_exc() # <-- ADD THIS LINE
         raise HTTPException(status_code=500, detail=f"Error processing LLM response: {str(e)}")
 
-    # 3. Safely build and execute SQL based on the *validated* response
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -110,6 +110,7 @@ async def handle_query(query: QueryRequest):
             device_name = validated_llm_response.params.device_name
             
             if validated_llm_response.query_type in ["SUM", "AVG", "TIME_SERIES"]:
+                # Use a parameterized query for the device name to prevent SQL injection
                 base_sql = "SELECT {agg_func} FROM telemetry t JOIN devices d ON t.device_id = d.id WHERE d.name = %s AND d.user_id = " + user_id_sql
                 
                 if validated_llm_response.query_type == "SUM":
@@ -123,13 +124,15 @@ async def handle_query(query: QueryRequest):
                 results = cur.fetchall()
 
                 if validated_llm_response.query_type == "TIME_SERIES":
-                     return {"summary": f"Time series data for {device_name}", "data": [{"timestamp": r[0], "usage": r[1]} for r in results]}
+                     return {"summary": f"Time series data for {device_name}", "data": [{"timestamp": r[0].isoformat(), "usage": r[1]} for r in results]}
                 else:
                      return {"summary": f"{validated_llm_response.query_type} usage for {device_name}", "value": results[0][0]}
 
     except Exception as e:
+        traceback.print_exc() # <-- ADD THIS LINE
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
     return {"detail": "Query type not implemented"}

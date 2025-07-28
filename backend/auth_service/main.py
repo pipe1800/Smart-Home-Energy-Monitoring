@@ -24,7 +24,7 @@ def read_root():
 
 @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
 def register_user(credentials: UserCredentials):
-    """Handles user registration by proxying to Supabase Auth."""
+    """Register new user"""
     try:
         res = supabase.auth.sign_up({
             "email": credentials.email,
@@ -45,7 +45,7 @@ def register_user(credentials: UserCredentials):
 
 @app.post("/auth/login")
 def login_user(credentials: UserCredentials):
-    """Handles user login by proxying to Supabase Auth."""
+    """Authenticate user"""
     try:
         res = supabase.auth.sign_in_with_password({
             "email": credentials.email,

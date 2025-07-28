@@ -13,13 +13,13 @@ class TelemetryData(BaseModel):
 app = FastAPI()
 
 def get_db_connection():
-    """Establishes a connection to the PostgreSQL database."""
+    """Get database connection"""
     try:
         conn = psycopg2.connect(
             dbname=os.getenv("POSTGRES_DB"),
             user=os.getenv("POSTGRES_USER"),
             password=os.getenv("POSTGRES_PASSWORD"),
-            host="smart_home_db",  # Assuming the service is running in a Docker container named 'smart_home_db'
+            host="smart_home_db",
             port="5432"
         )
         return conn
@@ -29,12 +29,11 @@ def get_db_connection():
 
 @app.get("/")
 def read_root():
-    """Root endpoint for health check."""
     return {"status": "Telemetry Service is running"}
 
 @app.post("/telemetry", status_code=status.HTTP_201_CREATED)
 def record_telemetry(data: TelemetryData):
-    """Receives telemetry data and saves it to the database."""
+    """Record telemetry data"""
     conn = get_db_connection()
     if conn is None:
         raise HTTPException(

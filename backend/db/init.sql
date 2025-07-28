@@ -1,7 +1,6 @@
 -- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- Users Table
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email TEXT NOT NULL UNIQUE,
@@ -10,7 +9,6 @@ CREATE TABLE users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Devices Table
 CREATE TABLE devices (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -18,7 +16,6 @@ CREATE TABLE devices (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Telemetry Data Table
 CREATE TABLE telemetry (
     timestamp TIMESTAMPTZ NOT NULL,
     device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
