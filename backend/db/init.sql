@@ -13,6 +13,8 @@ CREATE TABLE devices (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'thermostat', 'light', 'appliance', 'outlet'
+    room TEXT NOT NULL, -- 'living_room', 'bedroom', 'kitchen', etc.
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

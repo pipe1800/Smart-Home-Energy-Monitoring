@@ -1,60 +1,195 @@
 import os
-import traceback
-from fastapi import FastAPI, HTTPException, status
+import bcrypt
+import jwt
+import psycopg2
+from datetime import datetime, timedelta, timezone
+from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
-from supabase import create_client, Client
 
 load_dotenv()
 
-# Supabase Initialization
-url: str = os.environ.get("SUPABASE_URL")
-key: str = os.environ.get("SUPABASE_KEY")
-supabase: Client = create_client(url, key)
+JWT_SECRET = os.getenv("JWT_SECRET")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-class UserCredentials(BaseModel):
+class UserCreate(BaseModel):
     email: EmailStr
     password: str
 
+class TokenData(BaseModel):
+    email: str | None = None
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+def get_db_connection():
+    """Get database connection"""
+    try:
+        conn = psycopg2.connect(
+            dbname=os.getenv("POSTGRES_DB"),
+            user=os.getenv("POSTGRES_USER"),
+            password=os.getenv("POSTGRES_PASSWORD"),
+            host="smart_home_db",
+            port="5432"
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        print(f"Error connecting to database: {e}")
+        raise HTTPException(status_code=503, detail="Could not connect to the database.")
+
+def hash_password(password: str) -> str:
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(password=pwd_bytes, salt=salt)
+    return hashed_password.decode('utf-8')
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    password_byte_enc = plain_password.encode('utf-8')
+    hashed_password_byte_enc = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(password=password_byte_enc, hashed_password=hashed_password_byte_enc)
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def create_default_devices(user_id, conn):
+    """Create default smart home devices for new users"""
+    import random
+    from datetime import datetime, timedelta
+    
+    default_devices = [
+        ("Living Room AC", "appliance", "living_room"),
+        ("Kitchen Refrigerator", "appliance", "kitchen"),
+        ("Master Bedroom Light", "light", "bedroom"),
+        ("Smart Thermostat", "thermostat", "living_room"),
+        ("Home Office Outlet", "outlet", "office"),
+        ("Washing Machine", "appliance", "laundry"),
+    ]
+    
+    with conn.cursor() as cur:
+        for name, device_type, room in default_devices:
+            cur.execute(
+                """INSERT INTO devices (user_id, name, type, room) 
+                   VALUES (%s, %s, %s, %s) RETURNING id""",
+                (user_id, name, device_type, room)
+            )
+            device_id = cur.fetchone()[0]
+            
+            # Generate mock telemetry data for the last 7 days
+            now = datetime.now()
+            for days_ago in range(7):
+                for hour in range(24):
+                    timestamp = now - timedelta(days=days_ago, hours=hour)
+                    
+                    base_usage = {
+                        "appliance": 2.5,
+                        "light": 0.06,
+                        "thermostat": 3.0,
+                        "outlet": 0.5
+                    }.get(device_type, 1.0)
+                    
+                    random_factor = random.uniform(0.7, 1.3)
+                    if 6 <= hour <= 9 or 18 <= hour <= 22:  # Peak hours
+                        usage = base_usage * 1.5 * random_factor
+                    elif 0 <= hour <= 5:  # Night hours
+                        usage = base_usage * 0.3 * random_factor
+                    else:  # Day hours
+                        usage = base_usage * 0.8 * random_factor
+                    
+                    cur.execute(
+                        """INSERT INTO telemetry (timestamp, device_id, energy_usage)
+                           VALUES (%s, %s, %s)""",
+                        (timestamp, device_id, usage)
+                    )
+
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/auth")
 def read_root():
     return {"status": "Auth Service is running"}
 
 @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
-def register_user(credentials: UserCredentials):
+def register_user(user: UserCreate):
     """Register new user"""
+    hashed_pw = hash_password(user.password)
+    conn = get_db_connection()
+    device_count = 0
     try:
-        res = supabase.auth.sign_up({
-            "email": credentials.email,
-            "password": credentials.password,
-        })
-        if res.user is None and res.session is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User likely already exists or password is too weak."
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id",
+                (user.email, hashed_pw)
             )
-        return {"message": "Registration successful, please check your email to verify."}
-    except Exception as e:
-        traceback.print_exc() 
+            user_id = cur.fetchone()[0]
+            
+        # Create default devices and telemetry data
+        create_default_devices(user_id, conn)
+        conn.commit()
+        
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM devices WHERE user_id = %s", (user_id,))
+            device_count = cur.fetchone()[0]
+            print(f"Created {device_count} devices for user {user_id}")
+            
+    except psycopg2.IntegrityError:
+        conn.rollback()
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail=f"An unexpected error occurred: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered."
         )
-
-@app.post("/auth/login")
-def login_user(credentials: UserCredentials):
-    """Authenticate user"""
-    try:
-        res = supabase.auth.sign_in_with_password({
-            "email": credentials.email,
-            "password": credentials.password,
-        })
-        return res.session
     except Exception as e:
+        conn.rollback()
+        print(f"Error during registration: {str(e)}")
+        import traceback
         traceback.print_exc()
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Login failed: {e}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}"
         )
+    finally:
+        conn.close()
+        
+    return {"message": "User registered successfully", "user_id": str(user_id), "devices_created": device_count}
+
+@app.post("/auth/login", response_model=Token)
+def login_user(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Authenticate user"""
+    email = form_data.username
+    password = form_data.password
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, email, password_hash FROM users WHERE email = %s", (email,))
+            db_user = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    user_id, user_email, hashed_password = db_user
+
+    if not verify_password(password, hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    access_token = create_access_token(data={"sub": user_email, "user_id": str(user_id)})
+    return {"access_token": access_token, "token_type": "bearer"}

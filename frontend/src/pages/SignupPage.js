@@ -14,8 +14,8 @@ export const SignupPage = ({ onSwitch }) => {
         setMessage('');
         try {
             await auth.signup(email, password);
-            setMessage('Registration successful! Please sign in.');
-            setTimeout(() => onSwitch(), 2000); // Switch to login after a delay
+            setMessage('Registration successful! Logging you in...');
+            await auth.login(email, password);
         } catch (err) {
             setError(err.message);
         } finally {

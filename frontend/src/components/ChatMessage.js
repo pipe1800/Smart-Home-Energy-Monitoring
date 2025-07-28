@@ -8,7 +8,7 @@ export const ChatMessage = ({ message }) => {
     if (isError) {
         return (
             <div className="flex justify-center my-2">
-                <div className="bg-red-900 bg-opacity-50 text-red-200 p-3 rounded-lg max-w-2xl w-full">
+                <div className="bg-red-900 bg-opacity-50 text-red-200 p-2 rounded-lg w-full text-sm">
                     <p className="font-bold">Error</p>
                     <p>{content}</p>
                 </div>
@@ -19,7 +19,7 @@ export const ChatMessage = ({ message }) => {
     if (role === 'system') {
         return (
              <div className="flex justify-center my-2">
-                <div className="bg-gray-700 bg-opacity-50 text-gray-300 p-3 rounded-lg max-w-2xl w-full text-center">
+                <div className="bg-gray-700 bg-opacity-50 text-gray-300 p-2 rounded-lg w-full text-center text-sm">
                     <p>{content}</p>
                 </div>
             </div>
@@ -27,8 +27,8 @@ export const ChatMessage = ({ message }) => {
     }
 
     return (
-        <div className={`flex my-4 ${isUser ? 'justify-end' : 'justify-start'}`}>
-            <div className={`p-4 rounded-2xl max-w-3xl ${isUser ? 'bg-indigo-700 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>
+        <div className={`flex my-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
+            <div className={`p-3 rounded-2xl max-w-[80%] text-sm ${isUser ? 'bg-indigo-700 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>
                 {typeof content === 'string' ? <p>{content}</p> : content}
             </div>
         </div>

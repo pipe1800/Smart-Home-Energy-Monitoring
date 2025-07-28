@@ -2,4 +2,7 @@ fastapi
 uvicorn[standard]
 pydantic[email]
 python-dotenv
-supabase
+psycopg2-binary
+bcrypt
+PyJWT
+python-multipart

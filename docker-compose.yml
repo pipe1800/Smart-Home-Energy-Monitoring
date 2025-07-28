@@ -9,6 +9,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      #Added API key to ensure plug and play for the interviewer's testing
+      OPENROUTER_API_KEY: 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
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./backend/db:/docker-entrypoint-initdb.d
