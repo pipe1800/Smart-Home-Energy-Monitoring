@@ -1,5 +1,6 @@
 import React from 'react';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { ConsumptionTimeline } from './ConsumptionTimeline';
 
 export const EnergyDashboard = ({ data, onRefresh }) => {
     if (!data) {
@@ -66,12 +67,16 @@ export const EnergyDashboard = ({ data, onRefresh }) => {
                                 outerRadius={80}
                                 fill="#8884d8"
                                 dataKey="value"
+                                isAnimationActive={false}
                             >
                                 {pieData.map((entry, index) => (
                                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                 ))}
                             </Pie>
-                            <Tooltip />
+                            <Tooltip 
+                                formatter={(value) => `${value.toFixed(2)} kW`}
+                                contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }}
+                            />
                         </PieChart>
                     </ResponsiveContainer>
                 </div>
@@ -112,21 +117,35 @@ export const EnergyDashboard = ({ data, onRefresh }) => {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {data.current_usage.map((device, index) => (
-                        <div key={index} className="bg-gray-700 rounded-lg p-4 border border-gray-600">
+                        <div key={index} className={`rounded-lg p-4 border ${
+                            device.usage === 0 
+                                ? 'bg-gray-800 border-gray-700 opacity-60' 
+                                : 'bg-gray-700 border-gray-600'
+                        }`}>
                             <div className="flex items-start justify-between">
                                 <div>
                                     <h4 className="font-medium text-white">{device.name}</h4>
                                     <p className="text-xs text-gray-400 mt-1">{device.type} • {device.room.replace('_', ' ')}</p>
                                 </div>
                                 <div className="text-right">
-                                    <p className="text-lg font-semibold text-indigo-400">{device.usage.toFixed(2)}</p>
+                                    <p className={`text-lg font-semibold ${
+                                        device.usage === 0 ? 'text-gray-500' : 'text-indigo-400'
+                                    }`}>
+                                        {device.usage.toFixed(2)}
+                                    </p>
                                     <p className="text-xs text-gray-400">kW</p>
+                                    {device.usage === 0 && (
+                                        <p className="text-xs text-gray-500 mt-1">Inactive</p>
+                                    )}
                                 </div>
                             </div>
                         </div>
                     ))}
                 </div>
             </div>
+
+            {/* Consumption Timeline */}
+            <ConsumptionTimeline />
         </div>
     );
 };

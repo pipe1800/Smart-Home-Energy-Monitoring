@@ -27,7 +27,6 @@ class Token(BaseModel):
     token_type: str
 
 def get_db_connection():
-    """Get database connection"""
     try:
         conn = psycopg2.connect(
             dbname=os.getenv("POSTGRES_DB"),
@@ -60,54 +59,67 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 def create_default_devices(user_id, conn):
-    """Create default smart home devices for new users"""
     import random
     from datetime import datetime, timedelta
     
     default_devices = [
-        ("Living Room AC", "appliance", "living_room"),
-        ("Kitchen Refrigerator", "appliance", "kitchen"),
-        ("Master Bedroom Light", "light", "bedroom"),
-        ("Smart Thermostat", "thermostat", "living_room"),
-        ("Home Office Outlet", "outlet", "office"),
-        ("Washing Machine", "appliance", "laundry"),
+        ("Living Room AC", "appliance", "living_room", 3.5),
+        ("Kitchen Refrigerator", "appliance", "kitchen", 0.5),
+        ("Master Bedroom Light", "light", "bedroom", 0.06),
+        ("Smart Thermostat", "thermostat", "living_room", 2.0),
+        ("Home Office Outlet", "outlet", "office", 0.3),
+        ("Washing Machine", "appliance", "laundry", 2.0),
     ]
     
+    default_schedules = {
+        "Living Room AC": [(1,18,22,3.5), (2,18,22,3.5), (3,18,22,3.5), (4,18,22,3.5), (5,18,22,3.5), (6,12,23,3.5), (0,12,23,3.5)],
+        "Washing Machine": [(2,10,12,2.0), (5,10,12,2.0)],
+        "Home Office Outlet": [(1,9,17,0.3), (2,9,17,0.3), (3,9,17,0.3), (4,9,17,0.3), (5,9,17,0.3)],
+        "Kitchen Refrigerator": [(d,0,23,0.5) for d in range(7)],
+        "Master Bedroom Light": [(d,20,23,0.06) for d in range(7)],
+        "Smart Thermostat": [(d,6,9,2.0) for d in range(7)] + [(d,17,22,2.0) for d in range(7)]
+    }
+    
     with conn.cursor() as cur:
-        for name, device_type, room in default_devices:
+        for name, device_type, room, power_rating in default_devices:
             cur.execute(
-                """INSERT INTO devices (user_id, name, type, room) 
-                   VALUES (%s, %s, %s, %s) RETURNING id""",
-                (user_id, name, device_type, room)
+                """INSERT INTO devices (user_id, name, type, room, power_rating) 
+                   VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                (user_id, name, device_type, room, power_rating)
             )
             device_id = cur.fetchone()[0]
             
-            # Generate mock telemetry data for the last 7 days
+            if name in default_schedules:
+                for day, start, end, power in default_schedules[name]:
+                    cur.execute(
+                        """INSERT INTO device_schedules (device_id, day_of_week, start_hour, end_hour, power_consumption)
+                           VALUES (%s, %s, %s, %s, %s)""",
+                        (device_id, day, start, end, power)
+                    )
+            
             now = datetime.now()
             for days_ago in range(7):
-                for hour in range(24):
-                    timestamp = now - timedelta(days=days_ago, hours=hour)
+                timestamp = now - timedelta(days=days_ago)
+                day_of_week = (timestamp.weekday() + 1) % 7
+                
+                if name in default_schedules:
+                    day_schedule = [s for s in default_schedules[name] if s[0] == day_of_week]
                     
-                    base_usage = {
-                        "appliance": 2.5,
-                        "light": 0.06,
-                        "thermostat": 3.0,
-                        "outlet": 0.5
-                    }.get(device_type, 1.0)
-                    
-                    random_factor = random.uniform(0.7, 1.3)
-                    if 6 <= hour <= 9 or 18 <= hour <= 22:  # Peak hours
-                        usage = base_usage * 1.5 * random_factor
-                    elif 0 <= hour <= 5:  # Night hours
-                        usage = base_usage * 0.3 * random_factor
-                    else:  # Day hours
-                        usage = base_usage * 0.8 * random_factor
-                    
-                    cur.execute(
-                        """INSERT INTO telemetry (timestamp, device_id, energy_usage)
-                           VALUES (%s, %s, %s)""",
-                        (timestamp, device_id, usage)
-                    )
+                    for hour in range(24):
+                        timestamp_hour = timestamp.replace(hour=hour, minute=0, second=0)
+                        
+                        usage = 0
+                        for _, start, end, power in day_schedule:
+                            if start <= hour < end:
+                                usage = power * random.uniform(0.9, 1.1)
+                                break
+                        
+                        if usage > 0:
+                            cur.execute(
+                                """INSERT INTO telemetry (timestamp, device_id, energy_usage)
+                                   VALUES (%s, %s, %s)""",
+                                (timestamp_hour, device_id, usage)
+                            )
 
 app = FastAPI()
 
@@ -125,11 +137,22 @@ def read_root():
 
 @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
 def register_user(user: UserCreate):
-    """Register new user"""
-    hashed_pw = hash_password(user.password)
     conn = get_db_connection()
     device_count = 0
+    user_id = None
+    
     try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email = %s", (user.email,))
+            existing_user = cur.fetchone()
+            if existing_user:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Email already registered."
+                )
+        
+        hashed_pw = hash_password(user.password)
+        
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id",
@@ -137,38 +160,29 @@ def register_user(user: UserCreate):
             )
             user_id = cur.fetchone()[0]
             
-        # Create default devices and telemetry data
         create_default_devices(user_id, conn)
         conn.commit()
         
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM devices WHERE user_id = %s", (user_id,))
             device_count = cur.fetchone()[0]
-            print(f"Created {device_count} devices for user {user_id}")
             
-    except psycopg2.IntegrityError:
+        return {"message": "User registered successfully", "user_id": str(user_id), "devices_created": device_count}
+            
+    except HTTPException:
         conn.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered."
-        )
+        raise
     except Exception as e:
         conn.rollback()
-        print(f"Error during registration: {str(e)}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {str(e)}"
+            detail=f"Registration failed: {str(e)}"
         )
     finally:
         conn.close()
-        
-    return {"message": "User registered successfully", "user_id": str(user_id), "devices_created": device_count}
 
 @app.post("/auth/login", response_model=Token)
 def login_user(form_data: OAuth2PasswordRequestForm = Depends()):
-    """Authenticate user"""
     email = form_data.username
     password = form_data.password
     conn = get_db_connection()

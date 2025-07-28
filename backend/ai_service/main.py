@@ -3,13 +3,14 @@ import psycopg2
 import httpx
 import json
 import jwt
-import traceback  
+import traceback
 from fastapi import FastAPI, HTTPException, Request, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Union
+from datetime import datetime, timedelta
 
 
 load_dotenv()
@@ -35,9 +36,18 @@ class LLMParams(BaseModel):
     time_start: Optional[str] = None
     time_end: Optional[str] = None
 
-class LLMResponse(BaseModel):
+class DataQuery(BaseModel):
     query_type: Literal['SUM', 'AVG', 'LIST_DEVICES', 'TIME_SERIES']
     params: LLMParams
+
+class GeneralResponse(BaseModel):
+    response_type: Literal['GENERAL']
+    content: str
+
+class LLMResponse(BaseModel):
+    intent_type: Literal['DATA_QUERY', 'GENERAL_ADVICE']
+    data_query: Optional[DataQuery] = None
+    general_response: Optional[GeneralResponse] = None
 
 app = FastAPI()
 
@@ -60,36 +70,92 @@ def get_db_connection():
     )
     return conn
 
+def calculate_monthly_projection(device_id, conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT day_of_week, start_hour, end_hour, power_consumption 
+               FROM device_schedules WHERE device_id = %s""",
+            (device_id,)
+        )
+        schedule = cur.fetchall()
+        
+        if not schedule:
+            # Use historical average if no schedule
+            cur.execute(
+                """SELECT AVG(energy_usage) * 24 * 30
+                FROM telemetry 
+                WHERE device_id = %s
+                AND timestamp >= NOW() - INTERVAL '30 days'""",
+                (device_id,)
+            )
+            result = cur.fetchone()
+            return float(result[0]) if result[0] else 0
+        
+        # Calculate based on schedule
+        weekly_kwh = 0
+        for day, start, end, power in schedule:
+            hours = end - start if end > start else 0
+            weekly_kwh += hours * power
+        
+        # 4.33 weeks in a month on average
+        return weekly_kwh * 4.33
+
 SYSTEM_PROMPT = """
-You are a smart home data analyst. Your job is to take a user's question and convert it into a structured JSON object.
-You must only respond with JSON. The JSON object must conform to the following Pydantic models:
+You are an AI energy assistant for a smart home monitoring system. You help users understand their energy usage and provide comprehensive advice about energy-related topics.
 
-class LLMParams(BaseModel):
-    device_name: Optional[str] = None
-    time_start: Optional[str] = None
-    time_end: Optional[str] = None
+IMPORTANT: You have access to the user's actual device data, historical usage, and schedules. When asked about forecasts or projections, you should:
+1. Use the SUM query to get current month-to-date usage
+2. Calculate the monthly projection based on device schedules
+3. Provide a specific forecast based on their actual data
 
-class LLMResponse(BaseModel):
-    query_type: Literal['SUM', 'AVG', 'LIST_DEVICES', 'TIME_SERIES']
-    params: LLMParams
+The user has the following devices with schedules:
+- Living Room AC: Runs evenings (6-10 PM weekdays, 12-11 PM weekends) at 3.5 kW
+- Kitchen Refrigerator: Runs continuously at 0.5 kW
+- Master Bedroom Light: Runs evenings (8-11 PM) at 0.06 kW
+- Smart Thermostat: Runs mornings (6-9 AM) and evenings (5-10 PM) at 2.0 kW
+- Home Office Outlet: Runs weekdays (9 AM-5 PM) at 0.3 kW
+- Washing Machine: Runs Tuesday and Friday (10 AM-12 PM) at 2.0 kW
 
-Here are the available query types and when to use them:
-- `LIST_DEVICES`: Use ONLY when the user explicitly asks for a list of all their devices, such as "what devices do I have?", "list my devices", "show me all devices"
-- `SUM`: Use for calculating total energy usage for a specific device. Example: "total usage of Living Room AC", "how much energy has the refrigerator used?"
-- `AVG`: Use for calculating average energy usage for a specific device. Example: "average usage of thermostat", "what's the average consumption of my washing machine?"
-- `TIME_SERIES`: Use for getting detailed usage over time for a specific device. Example: "show me AC usage over time", "energy consumption pattern for bedroom light"
+When asked about monthly forecasts, projections, or "what will my bill be", respond with:
+{
+    "intent_type": "DATA_QUERY",
+    "data_query": {
+        "query_type": "SUM",
+        "params": {
+            "device_name": null,
+            "time_start": null,
+            "time_end": null
+        }
+    }
+}
 
-Important rules:
-1. If the user mentions a specific device name, extract it and use SUM, AVG, or TIME_SERIES based on what they're asking
-2. Only use LIST_DEVICES when they explicitly ask for all devices
-3. Default to TIME_SERIES if they mention a device but the intent is unclear
-4. Device names are case-sensitive and should match exactly: "Living Room AC", "Kitchen Refrigerator", "Master Bedroom Light", "Smart Thermostat", "Home Office Outlet", "Washing Machine"
+This will calculate the total forecast for all devices based on their schedules.
 
-Examples:
-- "How much energy is my Living Room AC using?" -> {"query_type": "SUM", "params": {"device_name": "Living Room AC"}}
-- "Show me all my devices" -> {"query_type": "LIST_DEVICES", "params": {}}
-- "What's the average usage of the refrigerator?" -> {"query_type": "AVG", "params": {"device_name": "Kitchen Refrigerator"}}
-- "Show me the thermostat data" -> {"query_type": "TIME_SERIES", "params": {"device_name": "Smart Thermostat"}}
+For data queries about specific devices:
+{
+    "intent_type": "DATA_QUERY",
+    "data_query": {
+        "query_type": "SUM" | "AVG" | "LIST_DEVICES" | "TIME_SERIES",
+        "params": {
+            "device_name": "Device Name" | null,
+            "time_start": null,
+            "time_end": null
+        }
+    }
+}
+
+For any other energy-related questions, advice, or estimates:
+{
+    "intent_type": "GENERAL_ADVICE",
+    "general_response": {
+        "response_type": "GENERAL",
+        "content": "Your comprehensive response here"
+    }
+}
+- Discuss renewable energy options
+- Explain smart home automation benefits
+
+Be conversational, helpful, and provide actionable advice. Use the user's context when available.
 """
 
 @app.get("/ai")
@@ -99,6 +165,84 @@ def read_root():
 @app.post("/ai/query")
 async def handle_query(query: QueryRequest, current_user_email: str = Depends(get_current_user_email)):
     print(f"User query: {query.question}")
+    
+    # Get user's actual devices for the prompt
+    conn = get_db_connection()
+    device_info = ""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT d.name, d.type, d.room, 
+                       COALESCE(ds.start_hour, 0) as start_hour,
+                       COALESCE(ds.end_hour, 0) as end_hour,
+                       COALESCE(ds.power_consumption, d.power_rating) as power
+                FROM devices d
+                LEFT JOIN device_schedules ds ON d.id = ds.device_id
+                WHERE d.user_id = (SELECT id FROM users WHERE email = %s)
+                ORDER BY d.name, ds.day_of_week
+            """, (current_user_email,))
+            devices = cur.fetchall()
+            
+            if devices:
+                device_list = {}
+                for name, dtype, room, start, end, power in devices:
+                    if name not in device_list:
+                        device_list[name] = f"- {name}: {dtype} in {room.replace('_', ' ')}"
+                device_info = "\n".join(device_list.values())
+            else:
+                device_info = "- No devices configured yet"
+    finally:
+        conn.close()
+    
+    # Build dynamic system prompt
+    DYNAMIC_SYSTEM_PROMPT = f"""
+You are an AI energy assistant for a smart home monitoring system. You help users understand their energy usage and provide comprehensive advice about energy-related topics.
+
+IMPORTANT: You have access to the user's actual device data, historical usage, and schedules. 
+
+The user has the following devices:
+{device_info}
+
+When asked about monthly forecasts, projections, cost estimates, or anything about "monthly" consumption/costs, respond with:
+{{
+    "intent_type": "DATA_QUERY",
+    "data_query": {{
+        "query_type": "SUM",
+        "params": {{
+            "device_name": null,
+            "time_start": null,
+            "time_end": null
+        }}
+    }}
+}}
+
+For data queries about specific devices, use their exact name from above:
+{{
+    "intent_type": "DATA_QUERY",
+    "data_query": {{
+        "query_type": "SUM" | "AVG" | "LIST_DEVICES" | "TIME_SERIES",
+        "params": {{
+            "device_name": "Exact Device Name" | null,
+            "time_start": null,
+            "time_end": null
+        }}
+    }}
+}}
+
+For any other energy-related questions, advice, or general conversation:
+{{
+    "intent_type": "GENERAL_ADVICE",
+    "general_response": {{
+        "response_type": "GENERAL",
+        "content": "Your comprehensive response here"
+    }}
+}}
+
+Remember:
+- For ANY question about monthly costs, forecasts, or projections, use DATA_QUERY with query_type: "SUM" and device_name: null
+- Match device names exactly as shown above
+- Be helpful and conversational in GENERAL_ADVICE responses
+"""
     
     try:
         async with httpx.AsyncClient() as client:
@@ -110,14 +254,14 @@ async def handle_query(query: QueryRequest, current_user_email: str = Depends(ge
                     "X-Title": "Smart Home Energy Monitor"
                 },
                 json={
-                    "model": "mistralai/mistral-7b-instruct-v0.2",
+                    "model": "anthropic/claude-3-haiku",
                     "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": DYNAMIC_SYSTEM_PROMPT},
                         {"role": "user", "content": query.question}
                     ],
                     "response_format": {"type": "json_object"},
-                    "temperature": 0.3,  
-                    "max_tokens": 150
+                    "temperature": 0.7,
+                    "max_tokens": 800
                 },
                 timeout=30.0
             )
@@ -127,114 +271,225 @@ async def handle_query(query: QueryRequest, current_user_email: str = Depends(ge
             
             llm_data = json.loads(llm_output_str)
             validated_llm_response = LLMResponse.model_validate(llm_data)
-            print(f"Parsed query type: {validated_llm_response.query_type}")
-            print(f"Parsed params: {validated_llm_response.params}")
+            print(f"Intent type: {validated_llm_response.intent_type}")
 
     except (httpx.HTTPStatusError, json.JSONDecodeError, Exception) as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error processing LLM response: {str(e)}")
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            # Get user ID
-            cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-            user_id = cur.fetchone()[0]
-            
-            if validated_llm_response.query_type == "LIST_DEVICES":
-                cur.execute(
-                    "SELECT name, id, type, room FROM devices WHERE user_id = %s ORDER BY room, name;",
-                    (user_id,)
+        # If it's a parsing error, try to help the user anyway
+        if "monthly" in query.question.lower() or "forecast" in query.question.lower():
+            # Force a monthly forecast query
+            validated_llm_response = LLMResponse(
+                intent_type="DATA_QUERY",
+                data_query=DataQuery(
+                    query_type="SUM",
+                    params=LLMParams(device_name=None, time_start=None, time_end=None)
                 )
-                results = cur.fetchall()
-                response_data = [
-                    {
-                        "name": row[0], 
-                        "id": str(row[1]),
-                        "type": row[2],
-                        "room": row[3]
-                    } 
-                    for row in results
-                ]
-                return {"summary": "Here are your devices:", "data": response_data}
-
-            # All other queries require a device name
-            if not validated_llm_response.params.device_name:
-                raise HTTPException(status_code=400, detail="Query type requires a device_name.")
-
-            device_name = validated_llm_response.params.device_name
-            
-            cur.execute(
-                "SELECT id FROM devices WHERE name = %s AND user_id = %s",
-                (device_name, user_id)
             )
-            device_result = cur.fetchone()
-            if not device_result:
-                return {
-                    "summary": f"Device '{device_name}' not found. Please use one of your registered devices.",
-                    "data": []
-                }
-            
-            device_id = device_result[0]
-            
-            if validated_llm_response.query_type == "SUM":
-                cur.execute(
-                    "SELECT COALESCE(SUM(energy_usage), 0) FROM telemetry WHERE device_id = %s",
-                    (device_id,)
-                )
-                result = cur.fetchone()[0]
-                return {
-                    "summary": f"Total energy usage for {device_name}",
-                    "value": float(result)
-                }
-                
-            elif validated_llm_response.query_type == "AVG":
-                cur.execute(
-                    "SELECT COALESCE(AVG(energy_usage), 0) FROM telemetry WHERE device_id = %s",
-                    (device_id,)
-                )
-                result = cur.fetchone()[0]
-                return {
-                    "summary": f"Average energy usage for {device_name}",
-                    "value": float(result)
-                }
-                
-            elif validated_llm_response.query_type == "TIME_SERIES":
-                cur.execute(
-                    """
-                    SELECT timestamp, energy_usage 
-                    FROM telemetry 
-                    WHERE device_id = %s 
-                    AND timestamp > NOW() - INTERVAL '24 hours'
-                    ORDER BY timestamp DESC
-                    LIMIT 24
-                    """,
-                    (device_id,)
-                )
-                results = cur.fetchall()
-                return {
-                    "summary": f"Energy usage over time for {device_name}",
-                    "data": [
-                        {
-                            "timestamp": r[0].isoformat(),
-                            "usage": float(r[1])
-                        } 
-                        for r in results
-                    ]
-                }
+        else:
+            return {
+                "summary": "I'm having trouble understanding your question.",
+                "content": "I apologize, but I'm having difficulty processing your request. You can ask me about:\n\n• Your device energy usage\n• Energy-saving tips\n• Monthly cost estimates\n• Best practices for efficiency\n• Peak hours and tariffs\n• And any other energy-related topics!\n\nPlease try rephrasing your question."
+            }
 
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-    finally:
-        if conn:
-            conn.close()
+    if validated_llm_response.intent_type == "GENERAL_ADVICE":
+        return {
+            "summary": "Energy Assistant",
+            "content": validated_llm_response.general_response.content
+        }
+    
+    if validated_llm_response.intent_type == "DATA_QUERY":
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+                user_id = cur.fetchone()[0]
+                
+                data_query = validated_llm_response.data_query
+                
+                if data_query.query_type == "LIST_DEVICES":
+                    cur.execute(
+                        "SELECT name, id, type, room FROM devices WHERE user_id = %s ORDER BY room, name;",
+                        (user_id,)
+                    )
+                    results = cur.fetchall()
+                    response_data = [
+                        {
+                            "name": row[0], 
+                            "id": str(row[1]),
+                            "type": row[2],
+                            "room": row[3]
+                        } 
+                        for row in results
+                    ]
+                    return {"summary": "Your Smart Home Devices", "data": response_data}
+
+                if not data_query.params.device_name:
+                    # Handle total forecast for all devices
+                    if data_query.query_type == "SUM":
+                        # Calculate total forecast for all devices
+                        cur.execute("""
+                            SELECT id, name
+                            FROM devices 
+                            WHERE user_id = %s
+                        """, (user_id,))
+                        all_devices = cur.fetchall()
+                        
+                        total_monthly_projection = 0
+                        total_current_usage = 0
+                        
+                        for device_id, device_name in all_devices:
+                            # Get current month usage
+                            cur.execute("""
+                                SELECT COALESCE(SUM(energy_usage), 0)
+                                FROM telemetry 
+                                WHERE device_id = %s
+                                AND timestamp >= DATE_TRUNC('month', CURRENT_DATE)
+                            """, (device_id,))
+                            device_current = float(cur.fetchone()[0])
+                            total_current_usage += device_current
+                            
+                            # Get projected monthly usage
+                            device_projection = calculate_monthly_projection(device_id, conn)
+                            total_monthly_projection += device_projection
+                        
+                        total_current_cost = total_current_usage * 0.12
+                        total_monthly_cost = total_monthly_projection * 0.12
+                        
+                        from datetime import datetime
+                        days_in_month = 30
+                        days_passed = datetime.now().day
+                        days_remaining = days_in_month - days_passed
+                        
+                        return {
+                            "summary": "Monthly Energy Forecast",
+                            "content": f"Based on your device schedules, your projected monthly usage is {total_monthly_projection:.2f} kWh (${total_monthly_cost:.2f}). So far this month, you've used {total_current_usage:.2f} kWh (${total_current_cost:.2f}) with {days_remaining} days remaining.",
+                            "value": total_monthly_projection,
+                            "unit": "kWh",
+                            "cost": f"${total_monthly_cost:.2f}",
+                            "current_usage": f"{total_current_usage:.2f} kWh",
+                            "current_cost": f"${total_current_cost:.2f}",
+                            "additional_info": f"This projection is based on your configured device schedules. Actual usage may vary."
+                        }
+                    else:
+                        return {
+                            "summary": "Please specify a device",
+                            "content": "I need to know which device you're asking about. You have: Living Room AC, Kitchen Refrigerator, Master Bedroom Light, Smart Thermostat, Home Office Outlet, and Washing Machine."
+                        }
+
+                device_name = data_query.params.device_name
+                
+                cur.execute(
+                    "SELECT id FROM devices WHERE name = %s AND user_id = %s",
+                    (device_name, user_id)
+                )
+                device_result = cur.fetchone()
+                if not device_result:
+                    return {
+                        "summary": f"Device not found",
+                        "content": f"I couldn't find '{device_name}' in your devices. Your available devices are: Living Room AC, Kitchen Refrigerator, Master Bedroom Light, Smart Thermostat, Home Office Outlet, and Washing Machine."
+                    }
+                
+                device_id = device_result[0]
+                
+                if data_query.query_type == "SUM":
+                    cur.execute(
+                        """
+                        SELECT COALESCE(SUM(energy_usage), 0),
+                               COUNT(*) as reading_count,
+                               MIN(timestamp) as first_reading,
+                               MAX(timestamp) as last_reading
+                        FROM telemetry 
+                        WHERE device_id = %s
+                        """,
+                        (device_id,)
+                    )
+                    result = cur.fetchone()
+                    total_kwh = float(result[0])
+                    reading_count = result[1]
+                    first_reading = result[2]
+                    last_reading = result[3]
+                    
+                    actual_cost = total_kwh * 0.12
+                    
+                    monthly_projection = calculate_monthly_projection(device_id, conn)
+                    monthly_cost_projection = monthly_projection * 0.12
+                    
+                    days_tracked = (last_reading - first_reading).days + 1 if first_reading else 0
+                    
+                    return {
+                        "summary": f"Energy usage for {device_name}",
+                        "value": total_kwh,
+                        "unit": "kWh",
+                        "cost": f"${actual_cost:.2f}",
+                        "monthly_projection": f"${monthly_cost_projection:.2f}",
+                        "additional_info": f"Actual usage: {total_kwh:.2f} kWh over {days_tracked} days (${actual_cost:.2f}). Projected monthly: {monthly_projection:.2f} kWh (${monthly_cost_projection:.2f})"
+                    }
+                    
+                elif data_query.query_type == "AVG":
+                    cur.execute(
+                        """
+                        SELECT COALESCE(AVG(energy_usage), 0),
+                               COUNT(DISTINCT DATE_TRUNC('day', timestamp))
+                        FROM telemetry 
+                        WHERE device_id = %s
+                        """,
+                        (device_id,)
+                    )
+                    result = cur.fetchone()
+                    avg_usage = float(result[0])
+                    days_tracked = result[1]
+                    monthly_estimate = avg_usage * 24 * 30 * 0.12
+                    
+                    return {
+                        "summary": f"Average energy usage for {device_name}",
+                        "value": avg_usage,
+                        "unit": "kW",
+                        "monthly_estimate": f"${monthly_estimate:.2f}",
+                        "additional_info": f"Based on {days_tracked} days of data, estimated monthly cost: ${monthly_estimate:.2f}"
+                    }
+                    
+                elif data_query.query_type == "TIME_SERIES":
+                    cur.execute(
+                        """
+                        SELECT timestamp, energy_usage 
+                        FROM telemetry 
+                        WHERE device_id = %s 
+                        AND timestamp > NOW() - INTERVAL '24 hours'
+                        ORDER BY timestamp DESC
+                        LIMIT 24
+                        """,
+                        (device_id,)
+                    )
+                    results = cur.fetchall()
+                    
+                    total_24h = sum(r[1] for r in results)
+                    daily_cost = total_24h * 0.12
+                    
+                    return {
+                        "summary": f"24-hour usage pattern for {device_name}",
+                        "data": [
+                            {
+                                "timestamp": r[0].isoformat(),
+                                "usage": float(r[1])
+                            } 
+                            for r in results
+                        ],
+                        "daily_total": f"{total_24h:.2f} kWh",
+                        "daily_cost": f"${daily_cost:.2f}",
+                        "additional_info": f"Yesterday's cost: ${daily_cost:.2f} (${daily_cost * 365:.2f}/year at this rate)"
+                    }
+
+        except Exception as e:
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
     return {"detail": "Query type not implemented"}
 
 @app.get("/ai/devices")
 async def get_user_devices(current_user_email: str = Depends(get_current_user_email)):
-    """Get all devices for the current user"""
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -262,15 +517,14 @@ async def get_user_devices(current_user_email: str = Depends(get_current_user_em
 
 @app.get("/ai/dashboard")
 async def get_dashboard_data(current_user_email: str = Depends(get_current_user_email)):
-    """Get dashboard summary data"""
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            # Get current usage by device
+            # Get all devices with their latest usage (or 0 if no telemetry)
             cur.execute("""
-                SELECT d.name, d.type, d.room, t.energy_usage
+                SELECT d.name, d.type, d.room, COALESCE(t.energy_usage, 0) as usage
                 FROM devices d
-                JOIN LATERAL (
+                LEFT JOIN LATERAL (
                     SELECT energy_usage 
                     FROM telemetry 
                     WHERE device_id = d.id 
@@ -278,10 +532,10 @@ async def get_dashboard_data(current_user_email: str = Depends(get_current_user_
                     LIMIT 1
                 ) t ON true
                 WHERE d.user_id = (SELECT id FROM users WHERE email = %s)
+                ORDER BY d.room, d.name
             """, (current_user_email,))
             current_usage = cur.fetchall()
             
-            # Get today's total usage
             cur.execute("""
                 SELECT COALESCE(SUM(t.energy_usage), 0)
                 FROM telemetry t
@@ -291,7 +545,6 @@ async def get_dashboard_data(current_user_email: str = Depends(get_current_user_
             """, (current_user_email,))
             today_total = cur.fetchone()[0]
             
-            # Get this month's total
             cur.execute("""
                 SELECT COALESCE(SUM(t.energy_usage), 0)
                 FROM telemetry t
@@ -313,7 +566,153 @@ async def get_dashboard_data(current_user_email: str = Depends(get_current_user_
                 ],
                 "today_total": float(today_total),
                 "month_total": float(month_total),
-                "estimated_monthly_cost": float(month_total) * 0.12  # $0.12 per kWh
+                "estimated_monthly_cost": float(month_total) * 0.12
             }
+    finally:
+        conn.close()
+
+@app.get("/ai/consumption-timeline")
+async def get_consumption_timeline(
+    view: Literal["daily", "weekly", "monthly"] = "daily",
+    current_user_email: str = Depends(get_current_user_email)
+):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user_result = cur.fetchone()
+            if not user_result:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_id = user_result[0]
+            
+            if view == "daily":
+                cur.execute("""
+                    SELECT 
+                        DATE_TRUNC('hour', t.timestamp) as time_bucket,
+                        SUM(t.energy_usage) as total_usage
+                    FROM telemetry t
+                    JOIN devices d ON t.device_id = d.id
+                    WHERE d.user_id = %s
+                    AND t.timestamp >= NOW() - INTERVAL '30 days'
+                    GROUP BY time_bucket
+                    ORDER BY time_bucket
+                """, (user_id,))
+                
+            elif view == "weekly":
+                cur.execute("""
+                    SELECT 
+                        DATE_TRUNC('day', t.timestamp) as time_bucket,
+                        SUM(t.energy_usage) as total_usage
+                    FROM telemetry t
+                    JOIN devices d ON t.device_id = d.id
+                    WHERE d.user_id = %s
+                    AND t.timestamp >= NOW() - INTERVAL '12 weeks'
+                    GROUP BY time_bucket
+                    ORDER BY time_bucket
+                """, (user_id,))
+                
+            else:
+                cur.execute("""
+                    SELECT 
+                        DATE_TRUNC('day', t.timestamp) as time_bucket,
+                        SUM(t.energy_usage) as total_usage
+                    FROM telemetry t
+                    JOIN devices d ON t.device_id = d.id
+                    WHERE d.user_id = %s
+                    AND t.timestamp >= NOW() - INTERVAL '12 months'
+                    GROUP BY time_bucket
+                    ORDER BY time_bucket
+                """, (user_id,))
+            
+            historical_data = cur.fetchall()
+            
+            cur.execute("""
+                SELECT 
+                    ds.day_of_week,
+                    ds.start_hour,
+                    ds.end_hour,
+                    ds.power_consumption
+                FROM device_schedules ds
+                JOIN devices d ON ds.device_id = d.id
+                WHERE d.user_id = %s
+            """, (user_id,))
+            
+            schedules = cur.fetchall()
+            
+            now = datetime.now()
+            forecast_data = []
+            
+            if view == "daily":
+                # For daily view, we want hourly forecasts for the next 7 days
+                for days_ahead in range(7):
+                    for hour in range(24):
+                        future_datetime = now + timedelta(days=days_ahead, hours=hour)
+                        day_of_week = (future_datetime.weekday() + 1) % 7
+                        
+                        hourly_usage = 0
+                        for sched_day, start, end, power in schedules:
+                            if sched_day == day_of_week and start <= hour < end:
+                                hourly_usage += power
+                        
+                        if days_ahead > 0 or hour > now.hour:  # Only future hours
+                            forecast_data.append({
+                                "timestamp": future_datetime.isoformat(),
+                                "usage": hourly_usage,
+                                "is_forecast": True
+                            })
+            elif view == "weekly":
+                for weeks_ahead in range(1, 5):
+                    future_date = now + timedelta(weeks=weeks_ahead)
+                    week_usage = 0
+                    
+                    for day in range(7):
+                        day_of_week = ((future_date + timedelta(days=day)).weekday() + 1) % 7
+                        daily_usage = 0
+                        for sched_day, start, end, power in schedules:
+                            if sched_day == day_of_week:
+                                daily_usage += (end - start) * power
+                        week_usage += daily_usage
+                    
+                    forecast_data.append({
+                        "timestamp": future_date.isoformat(),
+                        "usage": week_usage / 7,
+                        "is_forecast": True
+                    })
+            else:
+                for months_ahead in range(1, 4):
+                    future_date = now + timedelta(days=30 * months_ahead)
+                    monthly_usage = 0
+                    
+                    for day in range(30):
+                        day_of_week = ((future_date + timedelta(days=day)).weekday() + 1) % 7
+                        daily_usage = 0
+                        for sched_day, start, end, power in schedules:
+                            if sched_day == day_of_week:
+                                daily_usage += (end - start) * power
+                        monthly_usage += daily_usage
+                    
+                    forecast_data.append({
+                        "timestamp": future_date.isoformat(),
+                        "usage": monthly_usage / 30,
+                        "is_forecast": True
+                    })
+            
+            return {
+                "historical": [
+                    {
+                        "timestamp": row[0].isoformat(),
+                        "usage": float(row[1]),
+                        "is_forecast": False
+                    }
+                    for row in historical_data
+                ],
+                "forecast": forecast_data,
+                "view": view
+            }
+            
+    except Exception as e:
+        print(f"Timeline error: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error generating timeline: {str(e)}")
     finally:
         conn.close()

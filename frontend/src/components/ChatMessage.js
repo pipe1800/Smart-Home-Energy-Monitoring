@@ -26,9 +26,18 @@ export const ChatMessage = ({ message }) => {
         )
     }
 
+    // For assistant messages with data visualizations, use full width
+    const isDataVisualization = !isUser && typeof content !== 'string';
+    
     return (
         <div className={`flex my-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
-            <div className={`p-3 rounded-2xl max-w-[80%] text-sm ${isUser ? 'bg-indigo-700 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>
+            <div className={`p-3 rounded-2xl text-sm ${
+                isUser 
+                    ? 'bg-indigo-700 text-white rounded-br-none max-w-[80%]' 
+                    : isDataVisualization
+                        ? 'bg-gray-700 text-gray-200 rounded-bl-none w-full'
+                        : 'bg-gray-700 text-gray-200 rounded-bl-none max-w-[80%]'
+            }`}>
                 {typeof content === 'string' ? <p>{content}</p> : content}
             </div>
         </div>

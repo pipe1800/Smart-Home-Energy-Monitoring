@@ -4,12 +4,14 @@ import { postQuery, getDashboardData } from '../api/aiService';
 import { ChatMessage } from '../components/ChatMessage';
 import { DataVisualization } from '../components/DataVisualization';
 import { EnergyDashboard } from '../components/EnergyDashboard';
+import { DeviceManager } from '../components/DeviceManager';
 
 export const DashboardPage = () => {
     const [messages, setMessages] = useState([{role: 'system', content: 'Welcome! How can I help you analyze your energy data?'}]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [showChat, setShowChat] = useState(false);
+    const [showDeviceManager, setShowDeviceManager] = useState(false);
     const [dashboardData, setDashboardData] = useState(null);
     const chatEndRef = useRef(null);
     const auth = useAuth();
@@ -27,7 +29,12 @@ export const DashboardPage = () => {
     const loadDashboardData = async () => {
         try {
             const data = await getDashboardData(auth.token);
-            setDashboardData(data);
+            setDashboardData(prevData => {
+                if (JSON.stringify(prevData) !== JSON.stringify(data)) {
+                    return data;
+                }
+                return prevData;
+            });
         } catch (error) {
             console.error('Failed to load dashboard data:', error);
         }
@@ -59,9 +66,17 @@ export const DashboardPage = () => {
         <div className="flex flex-col h-screen bg-gray-900 text-white">
             <header className="flex justify-between items-center p-4 bg-gray-800 border-b border-gray-700 shadow-md">
                 <h1 className="text-xl font-bold text-indigo-400">Smart Home Energy Monitor</h1>
-                <button onClick={auth.logout} className="py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
-                    Logout
-                </button>
+                <div className="flex items-center gap-2">
+                    <button 
+                        onClick={() => setShowDeviceManager(true)}
+                        className="py-2 px-4 border border-gray-600 rounded-md shadow-sm text-sm font-medium text-white bg-gray-700 hover:bg-gray-600"
+                    >
+                        Manage Devices
+                    </button>
+                    <button onClick={auth.logout} className="py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                        Logout
+                    </button>
+                </div>
             </header>
             
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
@@ -81,7 +96,7 @@ export const DashboardPage = () => {
             )}
 
             {showChat && (
-                <div className="fixed bottom-6 right-6 w-96 h-[600px] bg-gray-800 rounded-lg shadow-2xl flex flex-col z-50 border border-gray-700">
+                <div className="fixed bottom-6 right-6 w-[500px] h-[600px] bg-gray-800 rounded-lg shadow-2xl flex flex-col z-50 border border-gray-700">
                     <div className="flex justify-between items-center p-4 border-b border-gray-700">
                         <h3 className="text-lg font-semibold text-indigo-400">AI Assistant</h3>
                         <button
@@ -123,6 +138,13 @@ export const DashboardPage = () => {
                         </div>
                     </form>
                 </div>
+            )}
+
+            {showDeviceManager && (
+                <DeviceManager 
+                    onClose={() => setShowDeviceManager(false)} 
+                    onDeviceChange={loadDashboardData}
+                />
             )}
         </div>
     );

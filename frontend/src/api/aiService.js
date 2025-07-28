@@ -37,3 +37,15 @@ export const getUserDevices = async (token) => {
     if (!response.ok) throw new Error(data.detail || 'Failed to get devices.');
     return data;
 };
+
+export const getConsumptionTimeline = async (view, token) => {
+    const response = await fetch(`${AI_API_URL}/consumption-timeline?view=${view}`, {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${token}`
+        },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to get timeline data.');
+    return data;
+};
