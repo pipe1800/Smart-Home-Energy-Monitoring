@@ -155,7 +155,7 @@ export const ConsumptionTimeline = () => {
                         iconType="line"
                     />
                     
-                    {/* Vertical line to separate actual from forecast */}
+                    {/* Today marker */}
                     {todayIndex > 0 && (
                         <ReferenceLine 
                             x={data?.[todayIndex - 1]?.timestamp} 

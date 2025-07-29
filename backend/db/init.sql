@@ -13,9 +13,9 @@ CREATE TABLE devices (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    type TEXT NOT NULL, -- 'thermostat', 'light', 'appliance', 'outlet'
-    room TEXT NOT NULL, -- 'living_room', 'bedroom', 'kitchen', etc.
-    power_rating FLOAT DEFAULT 1.0, -- Placeholder until schedule is set
+    type TEXT NOT NULL, -- Device types: thermostat, light, appliance, outlet, etc.
+    room TEXT NOT NULL, -- Room locations
+    power_rating FLOAT DEFAULT 1.0, -- Default power rating in kW
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -36,5 +36,5 @@ CREATE TABLE telemetry (
     PRIMARY KEY (timestamp, device_id)
 );
 
--- Speed up device history lookups
+-- Index for performance
 CREATE INDEX idx_telemetry_device_id_timestamp ON telemetry (device_id, timestamp DESC);

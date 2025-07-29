@@ -15,6 +15,12 @@ export const DeviceManager = ({ onClose, onDeviceChange }) => {
         customType: '',
         customRoom: ''
     });
+    
+    const [deviceName, setDeviceName] = useState('');
+    const [deviceType, setDeviceType] = useState('');
+    const [deviceRoom, setDeviceRoom] = useState('');
+    const [powerRating, setPowerRating] = useState('');
+    
     const auth = useAuth();
 
     const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -36,10 +42,17 @@ export const DeviceManager = ({ onClose, onDeviceChange }) => {
 
     const handleDeviceSelect = async (device) => {
         setSelectedDevice(device);
+        setDeviceName(device.name);
+        setDeviceType(device.type_id || '');
+        setDeviceRoom(device.room_id || '');
+        setPowerRating(device.power_rating || '');
+        
         try {
-            const scheduleData = await getDeviceSchedule(device.id, auth.token);
-            setSchedule(scheduleData.schedule || []);
+            const response = await getDeviceSchedule(device.id, auth.token);
+            // The schedule is nested inside data.schedule, not directly on the response
+            setSchedule(response.data?.schedule || []);
         } catch (error) {
+            console.error('Failed to load schedule:', error);
             setSchedule([]);
         }
     };
@@ -265,17 +278,23 @@ export const DeviceManager = ({ onClose, onDeviceChange }) => {
                                                 <p className="text-xs text-gray-500 italic">No usage scheduled</p>
                                             ) : (
                                                 <div className="space-y-2">
-                                                    {schedule.map((block, index) => {
-                                                        if (block.day_of_week !== dayIndex) return null;
+                                                    {daySchedules.map((block, blockIndex) => {
+                                                        // Find the actual index in the full schedule array
+                                                        const actualIndex = schedule.findIndex(s => 
+                                                            s.day_of_week === block.day_of_week && 
+                                                            s.start_hour === block.start_hour && 
+                                                            s.end_hour === block.end_hour &&
+                                                            s.power_consumption === block.power_consumption
+                                                        );
                                                         return (
-                                                            <div key={index} className="flex items-center gap-2 bg-gray-800 p-2 rounded">
+                                                            <div key={`${dayIndex}-${blockIndex}`} className="flex items-center gap-2 bg-gray-800 p-2 rounded">
                                                                 <span className="text-xs text-gray-400 w-8">From</span>
                                                                 <input
                                                                     type="number"
                                                                     min="0"
                                                                     max="23"
                                                                     value={block.start_hour}
-                                                                    onChange={(e) => updateScheduleBlock(index, 'start_hour', e.target.value)}
+                                                                    onChange={(e) => updateScheduleBlock(actualIndex, 'start_hour', e.target.value)}
                                                                     className="w-16 bg-gray-700 text-white rounded px-2 py-1 text-sm"
                                                                 />
                                                                 <span className="text-xs text-gray-400">to</span>
@@ -284,7 +303,7 @@ export const DeviceManager = ({ onClose, onDeviceChange }) => {
                                                                     min="0"
                                                                     max="23"
                                                                     value={block.end_hour}
-                                                                    onChange={(e) => updateScheduleBlock(index, 'end_hour', e.target.value)}
+                                                                    onChange={(e) => updateScheduleBlock(actualIndex, 'end_hour', e.target.value)}
                                                                     className="w-16 bg-gray-700 text-white rounded px-2 py-1 text-sm"
                                                                 />
                                                                 <span className="text-xs text-gray-400">at</span>
@@ -293,12 +312,12 @@ export const DeviceManager = ({ onClose, onDeviceChange }) => {
                                                                     min="0"
                                                                     step="0.1"
                                                                     value={block.power_consumption}
-                                                                    onChange={(e) => updateScheduleBlock(index, 'power_consumption', e.target.value)}
+                                                                    onChange={(e) => updateScheduleBlock(actualIndex, 'power_consumption', e.target.value)}
                                                                     className="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm"
                                                                 />
                                                                 <span className="text-gray-400 text-xs">kW</span>
                                                                 <button
-                                                                    onClick={() => removeScheduleBlock(index)}
+                                                                    onClick={() => removeScheduleBlock(actualIndex)}
                                                                     className="text-red-400 hover:text-red-300 ml-auto"
                                                                 >
                                                                     ×

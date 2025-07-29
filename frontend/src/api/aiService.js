@@ -1,51 +1,30 @@
-const AI_API_URL = 'http://localhost:8002/ai';
+import { apiClient, endpoints, getAuthHeaders } from './apiClient';
 
 export const postQuery = async (question, token) => {
-    const response = await fetch(`${AI_API_URL}/query`, {
+    return apiClient(`${endpoints.ai}/query`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
+        headers: getAuthHeaders(token),
         body: JSON.stringify({ question }),
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || 'Failed to get response from AI.');
-    return data;
 };
 
 export const getDashboardData = async (token) => {
-    const response = await fetch(`${AI_API_URL}/dashboard`, {
+    return apiClient(`${endpoints.ai}/dashboard`, {
         method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${token}`
-        },
+        headers: getAuthHeaders(token),
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || 'Failed to get dashboard data.');
-    return data;
 };
 
 export const getUserDevices = async (token) => {
-    const response = await fetch(`${AI_API_URL}/devices`, {
+    return apiClient(`${endpoints.ai}/devices`, {
         method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${token}`
-        },
+        headers: getAuthHeaders(token),
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || 'Failed to get devices.');
-    return data;
 };
 
 export const getConsumptionTimeline = async (view, token) => {
-    const response = await fetch(`${AI_API_URL}/consumption-timeline?view=${view}`, {
+    return apiClient(`${endpoints.ai}/consumption-timeline?view=${view}`, {
         method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${token}`
-        },
+        headers: getAuthHeaders(token),
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || 'Failed to get timeline data.');
-    return data;
 };

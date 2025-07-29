@@ -1,32 +1,23 @@
 import os
-import psycopg2
 import httpx
 import json
-import jwt
 import traceback
 from fastapi import FastAPI, HTTPException, Request, status, Depends
-from fastapi.security import OAuth2PasswordBearer
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from typing import List, Optional, Literal, Union
 from datetime import datetime, timedelta
 
+from shared.auth import get_current_user_email
+from shared.database import db_pool
+from shared.models import success_response
+from shared.utils import setup_cors, setup_exception_handlers, setup_logging
+from shared.rate_limiting import ai_rate_limiter
 
 load_dotenv()
 
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-
-def get_current_user_email(token: str = Depends(oauth2_scheme)):
-    try:
-        payload = jwt.decode(token, os.getenv("JWT_SECRET"), algorithms=["HS256"])
-        email = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return email
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+# Setup logging
+logger = setup_logging("ai_service")
 
 class QueryRequest(BaseModel):
     question: str
@@ -49,26 +40,11 @@ class LLMResponse(BaseModel):
     data_query: Optional[DataQuery] = None
     general_response: Optional[GeneralResponse] = None
 
-app = FastAPI()
+app = FastAPI(title="AI Service", version="1.0.0")
 
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"], 
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-def get_db_connection():
-    conn = psycopg2.connect(
-        dbname=os.getenv("POSTGRES_DB"),
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        host="smart_home_db",
-        port="5432"
-    )
-    return conn
+# Setup middleware and exception handlers
+setup_cors(app)
+setup_exception_handlers(app)
 
 def calculate_monthly_projection(device_id, conn):
     with conn.cursor() as cur:
@@ -164,12 +140,14 @@ def read_root():
 
 @app.post("/ai/query")
 async def handle_query(query: QueryRequest, current_user_email: str = Depends(get_current_user_email)):
-    print(f"User query: {query.question}")
+    # Apply rate limiting
+    ai_rate_limiter.check_rate_limit(current_user_email)
+    
+    logger.info(f"User query from {current_user_email}: {query.question}")
     
     # Get user's actual devices for the prompt
-    conn = get_db_connection()
     device_info = ""
-    try:
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT d.name, d.type, d.room, 
@@ -191,8 +169,6 @@ async def handle_query(query: QueryRequest, current_user_email: str = Depends(ge
                 device_info = "\n".join(device_list.values())
             else:
                 device_info = "- No devices configured yet"
-    finally:
-        conn.close()
     
     # Build dynamic system prompt
     DYNAMIC_SYSTEM_PROMPT = f"""
@@ -275,7 +251,7 @@ Remember:
 
     except (httpx.HTTPStatusError, json.JSONDecodeError, Exception) as e:
         traceback.print_exc()
-        # If it's a parsing error, try to help the user anyway
+        # Fallback for parsing errors
         if "monthly" in query.question.lower() or "forecast" in query.question.lower():
             # Force a monthly forecast query
             validated_llm_response = LLMResponse(
@@ -298,8 +274,7 @@ Remember:
         }
     
     if validated_llm_response.intent_type == "DATA_QUERY":
-        conn = get_db_connection()
-        try:
+        with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
                 user_id = cur.fetchone()[0]
@@ -479,19 +454,11 @@ Remember:
                         "additional_info": f"Yesterday's cost: ${daily_cost:.2f} (${daily_cost * 365:.2f}/year at this rate)"
                     }
 
-        except Exception as e:
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-        finally:
-            if conn:
-                conn.close()
-
     return {"detail": "Query type not implemented"}
 
 @app.get("/ai/devices")
 async def get_user_devices(current_user_email: str = Depends(get_current_user_email)):
-    conn = get_db_connection()
-    try:
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, name, type, room, created_at 
@@ -512,13 +479,10 @@ async def get_user_devices(current_user_email: str = Depends(get_current_user_em
                     for device in devices
                 ]
             }
-    finally:
-        conn.close()
 
 @app.get("/ai/dashboard")
 async def get_dashboard_data(current_user_email: str = Depends(get_current_user_email)):
-    conn = get_db_connection()
-    try:
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             # Get all devices with their latest usage (or 0 if no telemetry)
             cur.execute("""
@@ -568,16 +532,13 @@ async def get_dashboard_data(current_user_email: str = Depends(get_current_user_
                 "month_total": float(month_total),
                 "estimated_monthly_cost": float(month_total) * 0.12
             }
-    finally:
-        conn.close()
 
 @app.get("/ai/consumption-timeline")
 async def get_consumption_timeline(
     view: Literal["daily", "weekly", "monthly"] = "daily",
     current_user_email: str = Depends(get_current_user_email)
 ):
-    conn = get_db_connection()
-    try:
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
             user_result = cur.fetchone()
@@ -643,7 +604,7 @@ async def get_consumption_timeline(
             forecast_data = []
             
             if view == "daily":
-                # For daily view, we want hourly forecasts for the next 7 days
+                # Generate 7-day hourly forecast
                 for days_ahead in range(7):
                     for hour in range(24):
                         future_datetime = now + timedelta(days=days_ahead, hours=hour)
@@ -654,7 +615,7 @@ async def get_consumption_timeline(
                             if sched_day == day_of_week and start <= hour < end:
                                 hourly_usage += power
                         
-                        if days_ahead > 0 or hour > now.hour:  # Only future hours
+                        if days_ahead > 0 or hour > now.hour:
                             forecast_data.append({
                                 "timestamp": future_datetime.isoformat(),
                                 "usage": hourly_usage,
@@ -709,10 +670,3 @@ async def get_consumption_timeline(
                 "forecast": forecast_data,
                 "view": view
             }
-            
-    except Exception as e:
-        print(f"Timeline error: {str(e)}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error generating timeline: {str(e)}")
-    finally:
-        conn.close()

@@ -2,9 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Copy shared modules first
+COPY shared /app/shared
+
+# Copy service-specific files
+COPY ai_service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY ai_service/ .
+
+# Add the app directory to Python path
+ENV PYTHONPATH=/app:$PYTHONPATH
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

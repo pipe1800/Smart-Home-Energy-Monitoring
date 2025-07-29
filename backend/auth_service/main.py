@@ -1,23 +1,36 @@
 import os
 import bcrypt
 import jwt
-import psycopg2
+import httpx
+import uvicorn
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 
+from shared.database import db_pool
+from shared.models import success_response, UserCreate
+from shared.utils import setup_cors, setup_exception_handlers, setup_logging
+from shared.rate_limiting import auth_rate_limiter
+
 load_dotenv()
 
+# Setup logging
+logger = setup_logging("auth_service")
+
+# Environment variables validation
+required_env_vars = ["JWT_SECRET", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"]
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise RuntimeError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+# Configuration
+DATABASE_URL = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST', 'smart_home_db')}/{os.getenv('POSTGRES_DB')}"
 JWT_SECRET = os.getenv("JWT_SECRET")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+DEVICE_SERVICE_URL = os.getenv("DEVICE_SERVICE_URL", "http://device_service:8003")
 
 class TokenData(BaseModel):
     email: str | None = None
@@ -25,20 +38,6 @@ class TokenData(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
-
-def get_db_connection():
-    try:
-        conn = psycopg2.connect(
-            dbname=os.getenv("POSTGRES_DB"),
-            user=os.getenv("POSTGRES_USER"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            host="smart_home_db",
-            port="5432"
-        )
-        return conn
-    except psycopg2.OperationalError as e:
-        print(f"Error connecting to database: {e}")
-        raise HTTPException(status_code=503, detail="Could not connect to the database.")
 
 def hash_password(password: str) -> str:
     pwd_bytes = password.encode('utf-8')
@@ -58,90 +57,44 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=ALGORITHM)
     return encoded_jwt
 
-def create_default_devices(user_id, conn):
-    import random
-    from datetime import datetime, timedelta
-    
-    default_devices = [
-        ("Living Room AC", "appliance", "living_room", 3.5),
-        ("Kitchen Refrigerator", "appliance", "kitchen", 0.5),
-        ("Master Bedroom Light", "light", "bedroom", 0.06),
-        ("Smart Thermostat", "thermostat", "living_room", 2.0),
-        ("Home Office Outlet", "outlet", "office", 0.3),
-        ("Washing Machine", "appliance", "laundry", 2.0),
-    ]
-    
-    default_schedules = {
-        "Living Room AC": [(1,18,22,3.5), (2,18,22,3.5), (3,18,22,3.5), (4,18,22,3.5), (5,18,22,3.5), (6,12,23,3.5), (0,12,23,3.5)],
-        "Washing Machine": [(2,10,12,2.0), (5,10,12,2.0)],
-        "Home Office Outlet": [(1,9,17,0.3), (2,9,17,0.3), (3,9,17,0.3), (4,9,17,0.3), (5,9,17,0.3)],
-        "Kitchen Refrigerator": [(d,0,23,0.5) for d in range(7)],
-        "Master Bedroom Light": [(d,20,23,0.06) for d in range(7)],
-        "Smart Thermostat": [(d,6,9,2.0) for d in range(7)] + [(d,17,22,2.0) for d in range(7)]
-    }
-    
-    with conn.cursor() as cur:
-        for name, device_type, room, power_rating in default_devices:
-            cur.execute(
-                """INSERT INTO devices (user_id, name, type, room, power_rating) 
-                   VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-                (user_id, name, device_type, room, power_rating)
+async def create_user_defaults(user_id: str) -> int:
+    """Call device service to create default devices for new user"""
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"{DEVICE_SERVICE_URL}/devices/create-defaults",
+                json={"user_id": str(user_id)},
+                headers={"X-Internal-Request": "true"}
             )
-            device_id = cur.fetchone()[0]
-            
-            if name in default_schedules:
-                for day, start, end, power in default_schedules[name]:
-                    cur.execute(
-                        """INSERT INTO device_schedules (device_id, day_of_week, start_hour, end_hour, power_consumption)
-                           VALUES (%s, %s, %s, %s, %s)""",
-                        (device_id, day, start, end, power)
-                    )
-            
-            now = datetime.now()
-            for days_ago in range(7):
-                timestamp = now - timedelta(days=days_ago)
-                day_of_week = (timestamp.weekday() + 1) % 7
-                
-                if name in default_schedules:
-                    day_schedule = [s for s in default_schedules[name] if s[0] == day_of_week]
-                    
-                    for hour in range(24):
-                        timestamp_hour = timestamp.replace(hour=hour, minute=0, second=0)
-                        
-                        usage = 0
-                        for _, start, end, power in day_schedule:
-                            if start <= hour < end:
-                                usage = power * random.uniform(0.9, 1.1)
-                                break
-                        
-                        if usage > 0:
-                            cur.execute(
-                                """INSERT INTO telemetry (timestamp, device_id, energy_usage)
-                                   VALUES (%s, %s, %s)""",
-                                (timestamp_hour, device_id, usage)
-                            )
+            response.raise_for_status()
+            result = response.json()
+            return result.get("data", {}).get("devices_created", 0)
+        except httpx.RequestError as e:
+            print(f"Error communicating with device service: {e}")
+            return 0
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            return 0
 
-app = FastAPI()
+app = FastAPI(title="Auth Service", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Setup middleware and exception handlers
+setup_cors(app)
+setup_exception_handlers(app)
 
 @app.get("/auth")
 def read_root():
     return {"status": "Auth Service is running"}
 
 @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
-def register_user(user: UserCreate):
-    conn = get_db_connection()
+async def register_user(user: UserCreate):
+    # Apply rate limiting to registration attempts
+    auth_rate_limiter.check_rate_limit(user.email)
+    
     device_count = 0
     user_id = None
     
-    try:
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM users WHERE email = %s", (user.email,))
             existing_user = cur.fetchone()
@@ -159,39 +112,28 @@ def register_user(user: UserCreate):
                 (user.email, hashed_pw)
             )
             user_id = cur.fetchone()[0]
-            
-        create_default_devices(user_id, conn)
-        conn.commit()
-        
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM devices WHERE user_id = %s", (user_id,))
-            device_count = cur.fetchone()[0]
-            
-        return {"message": "User registered successfully", "user_id": str(user_id), "devices_created": device_count}
-            
-    except HTTPException:
-        conn.rollback()
-        raise
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Registration failed: {str(e)}"
-        )
-    finally:
-        conn.close()
+    
+    # Request device service to initialize user defaults
+    device_count = await create_user_defaults(user_id)
+    
+    return success_response(
+        data={"user_id": str(user_id), "devices_created": device_count},
+        message="User registered successfully"
+    )
+
 
 @app.post("/auth/login", response_model=Token)
 def login_user(form_data: OAuth2PasswordRequestForm = Depends()):
     email = form_data.username
     password = form_data.password
-    conn = get_db_connection()
-    try:
+    
+    # Apply rate limiting to login attempts
+    auth_rate_limiter.check_rate_limit(email)
+    
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id, email, password_hash FROM users WHERE email = %s", (email,))
             db_user = cur.fetchone()
-    finally:
-        conn.close()
 
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -207,3 +149,7 @@ def login_user(form_data: OAuth2PasswordRequestForm = Depends()):
         
     access_token = create_access_token(data={"sub": user_email, "user_id": str(user_id)})
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

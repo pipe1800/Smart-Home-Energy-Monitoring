@@ -1,84 +1,47 @@
 import os
-import psycopg2
 from psycopg2.extras import register_uuid
-import jwt
 from fastapi import FastAPI, HTTPException, status, Depends
-from fastapi.security import OAuth2PasswordBearer
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from typing import List, Optional
 from uuid import UUID
 
+from shared.auth import get_current_user_id
+from shared.database import db_pool
+from shared.models import DeviceCreate, DeviceUpdate, success_response
+from shared.utils import setup_cors, setup_exception_handlers, setup_logging
+from shared.rate_limiting import device_rate_limiter
+
 load_dotenv()
+
+# Register UUID adapter for psycopg2
+register_uuid()
+
+# Setup logging
+logger = setup_logging("telemetry_service")
 
 class TelemetryData(BaseModel):
     device_id: str 
     energy_usage: float
 
-class DeviceCreate(BaseModel):
-    name: str
-    type: str
-    room: str
-    power_rating: float
-
-class DeviceUpdate(BaseModel):
-    name: Optional[str] = None
-    power_rating: Optional[float] = None
-
 class ScheduleBlock(BaseModel):
-    day_of_week: int
-    start_hour: int
-    end_hour: int
-    power_consumption: float
+    day_of_week: int = Field(..., ge=0, le=6)  # 0=Monday, 6=Sunday
+    start_hour: int = Field(..., ge=0, le=23)
+    end_hour: int = Field(..., ge=0, le=23)
+    power_consumption: float = Field(..., gt=0)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+app = FastAPI(title="Telemetry Service", version="1.0.0")
 
-def get_current_user_id(token: str = Depends(oauth2_scheme)):
-    try:
-        payload = jwt.decode(token, os.getenv("JWT_SECRET"), algorithms=["HS256"])
-        email = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-            user_id = cur.fetchone()[0]
-        conn.close()
-        return user_id
-    except:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"], 
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-def get_db_connection():
-    try:
-        conn = psycopg2.connect(
-            dbname=os.getenv("POSTGRES_DB"),
-            user=os.getenv("POSTGRES_USER"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            host="smart_home_db",
-            port="5432"
-        )
-        register_uuid()
-        return conn
-    except psycopg2.OperationalError as e:
-        print(f"Error connecting to database: {e}")
-        return None
+# Setup middleware and exception handlers
+setup_cors(app)
+setup_exception_handlers(app)
 
 @app.post("/devices", status_code=status.HTTP_201_CREATED)
 def create_device(device: DeviceCreate, user_id: UUID = Depends(get_current_user_id)):
-    conn = get_db_connection()
-    try:
+    # Apply rate limiting
+    device_rate_limiter.check_rate_limit(str(user_id))
+    
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO devices (user_id, name, type, room, power_rating) 
@@ -87,21 +50,25 @@ def create_device(device: DeviceCreate, user_id: UUID = Depends(get_current_user
             )
             device_id = cur.fetchone()[0]
             
-            # Initialize with zero reading for immediate visibility
+            # Add initial telemetry entry
             cur.execute(
                 """INSERT INTO telemetry (timestamp, device_id, energy_usage)
                    VALUES (NOW(), %s, 0)""",
                 (device_id,)
             )
-        conn.commit()
-        return {"id": str(device_id), "message": "Device created successfully"}
-    finally:
-        conn.close()
+    
+    logger.info(f"Device created successfully: {device_id} for user {user_id}")
+    return success_response(
+        data={"id": str(device_id)},
+        message="Device created successfully"
+    )
 
 @app.put("/devices/{device_id}")
 def update_device(device_id: UUID, device_update: DeviceUpdate, user_id: UUID = Depends(get_current_user_id)):
-    conn = get_db_connection()
-    try:
+    # Apply rate limiting
+    device_rate_limiter.check_rate_limit(str(user_id))
+    
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM devices WHERE id = %s AND user_id = %s", (device_id, user_id))
             if not cur.fetchone():
@@ -122,15 +89,16 @@ def update_device(device_id: UUID, device_update: DeviceUpdate, user_id: UUID = 
                     f"UPDATE devices SET {', '.join(updates)} WHERE id = %s AND user_id = %s",
                     values
                 )
-        conn.commit()
-        return {"message": "Device updated successfully"}
-    finally:
-        conn.close()
+    
+    logger.info(f"Device updated successfully: {device_id}")
+    return success_response(message="Device updated successfully")
 
 @app.post("/devices/{device_id}/schedule")
 def set_device_schedule(device_id: UUID, schedule: List[ScheduleBlock], user_id: UUID = Depends(get_current_user_id)):
-    conn = get_db_connection()
-    try:
+    # Apply rate limiting
+    device_rate_limiter.check_rate_limit(str(user_id))
+    
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM devices WHERE id = %s AND user_id = %s", (device_id, user_id))
             if not cur.fetchone():
@@ -144,15 +112,13 @@ def set_device_schedule(device_id: UUID, schedule: List[ScheduleBlock], user_id:
                        VALUES (%s, %s, %s, %s, %s)""",
                     (device_id, block.day_of_week, block.start_hour, block.end_hour, block.power_consumption)
                 )
-        conn.commit()
-        return {"message": "Schedule updated successfully"}
-    finally:
-        conn.close()
+    
+    logger.info(f"Schedule updated for device: {device_id}")
+    return success_response(message="Schedule updated successfully")
 
 @app.get("/devices/{device_id}/schedule")
 def get_device_schedule(device_id: UUID, user_id: UUID = Depends(get_current_user_id)):
-    conn = get_db_connection()
-    try:
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM devices WHERE id = %s AND user_id = %s", (device_id, user_id))
             if not cur.fetchone():
@@ -172,22 +138,22 @@ def get_device_schedule(device_id: UUID, user_id: UUID = Depends(get_current_use
                 }
                 for row in cur.fetchall()
             ]
-        return {"schedule": schedule}
-    finally:
-        conn.close()
+    
+    return success_response(data={"schedule": schedule})
 
 @app.delete("/devices/{device_id}")
 def delete_device(device_id: UUID, user_id: UUID = Depends(get_current_user_id)):
-    conn = get_db_connection()
-    try:
+    # Apply rate limiting
+    device_rate_limiter.check_rate_limit(str(user_id))
+    
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM devices WHERE id = %s AND user_id = %s", (device_id, user_id))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Device not found")
-        conn.commit()
-        return {"message": "Device deleted successfully"}
-    finally:
-        conn.close()
+    
+    logger.info(f"Device deleted successfully: {device_id}")
+    return success_response(message="Device deleted successfully")
 
 @app.get("/")
 def read_root():
@@ -195,14 +161,7 @@ def read_root():
 
 @app.post("/telemetry", status_code=status.HTTP_201_CREATED)
 def record_telemetry(data: TelemetryData):
-    conn = get_db_connection()
-    if conn is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Could not connect to the database."
-        )
-    
-    try:
+    with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -211,14 +170,8 @@ def record_telemetry(data: TelemetryData):
                 """,
                 (data.device_id, data.energy_usage)
             )
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {e}"
-        )
-    finally:
-        conn.close()
-        
-    return {"message": "Telemetry data recorded successfully", "data": data}
+    
+    return success_response(
+        data=data.dict(),
+        message="Telemetry data recorded successfully"
+    )
