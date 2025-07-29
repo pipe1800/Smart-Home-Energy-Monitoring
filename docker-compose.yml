@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:15-alpine
-    container_name: smart_home_db
+    container_name: smart-home-db
     restart: always
     ports:
       - "5433:5432"
@@ -18,11 +18,11 @@ services:
       timeout: 5s
       retries: 5
 
-  telemetry_service:
+  telemetry-service:
     build:
       context: ./backend
-      dockerfile: telemetry_service/Dockerfile
-    container_name: telemetry_service
+      dockerfile: telemetry-service/Dockerfile
+    container_name: telemetry-service
     restart: always
     ports:
       - "8001:8000"  
@@ -32,11 +32,11 @@ services:
       db:
         condition: service_healthy
   
-  auth_service:
+  auth-service:
     build:
       context: ./backend
-      dockerfile: auth_service/Dockerfile
-    container_name: auth_service
+      dockerfile: auth-service/Dockerfile
+    container_name: auth-service
     restart: always
     ports:
       - "8000:8000"  
@@ -46,11 +46,11 @@ services:
       db:
         condition: service_healthy
 
-  ai_service:
+  ai-service:
     build:
       context: ./backend
-      dockerfile: ai_service/Dockerfile
-    container_name: ai_service
+      dockerfile: ai-service/Dockerfile
+    container_name: ai-service
     restart: always
     ports:
       - "8002:8000"  

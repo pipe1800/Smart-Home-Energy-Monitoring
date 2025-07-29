@@ -83,9 +83,9 @@ cd frontend && npm install
 
 # Run services individually
 docker-compose up db -d
-cd backend/auth_service && python main.py
-cd backend/telemetry_service && python main.py
-cd backend/ai_service && python main.py
+cd backend/auth-service && python main.py
+cd backend/telemetry-service && python main.py
+cd backend/ai-service && python main.py
 cd frontend && npm start
 ```
 

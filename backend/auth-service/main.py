@@ -17,7 +17,7 @@ from shared.rate_limiting import auth_rate_limiter
 load_dotenv()
 
 # Setup logging
-logger = setup_logging("auth_service")
+logger = setup_logging("auth-service")
 
 # Environment variables validation
 required_env_vars = ["JWT_SECRET", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"]
@@ -26,7 +26,7 @@ if missing_vars:
     raise RuntimeError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 # Configuration
-DATABASE_URL = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST', 'smart_home_db')}/{os.getenv('POSTGRES_DB')}"
+DATABASE_URL = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST', 'db')}/{os.getenv('POSTGRES_DB')}"
 JWT_SECRET = os.getenv("JWT_SECRET")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))

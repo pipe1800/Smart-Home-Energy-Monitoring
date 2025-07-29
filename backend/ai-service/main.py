@@ -17,7 +17,7 @@ from shared.rate_limiting import ai_rate_limiter
 load_dotenv()
 
 # Setup logging
-logger = setup_logging("ai_service")
+logger = setup_logging("ai-service")
 
 class QueryRequest(BaseModel):
     question: str

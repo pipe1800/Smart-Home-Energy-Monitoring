@@ -18,7 +18,7 @@ load_dotenv()
 register_uuid()
 
 # Setup logging
-logger = setup_logging("telemetry_service")
+logger = setup_logging("telemetry-service")
 
 class TelemetryData(BaseModel):
     device_id: str 

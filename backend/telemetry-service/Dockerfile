@@ -6,10 +6,10 @@ WORKDIR /app
 COPY shared /app/shared
 
 # Copy service-specific files
-COPY ai_service/requirements.txt .
+COPY telemetry-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ai_service/ .
+COPY telemetry-service/ .
 
 # Add the app directory to Python path
 ENV PYTHONPATH=/app:$PYTHONPATH

@@ -6,10 +6,10 @@ WORKDIR /app
 COPY shared /app/shared
 
 # Copy service-specific files
-COPY auth_service/requirements.txt .
+COPY ai-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY auth_service/ .
+COPY ai-service/ .
 
 # Add the app directory to Python path
 ENV PYTHONPATH=/app:$PYTHONPATH
