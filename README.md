@@ -1,156 +1,92 @@
-# Smart Home Energy Monitoring with Conversational AI
+### **Project Overview**
 
-A comprehensive platform that helps users monitor and understand their energy consumption patterns with the assistance of **Wat**, an AI-powered energy advisor 🤖⚡️
+The Smart Home Energy Monitoring platform is a comprehensive tool for tracking and analyzing energy consumption patterns. It features **Wat**, a conversational AI energy advisor, that provides users with insights and forecasting to help them better understand and optimize their energy usage.
 
-## 🚀 Quick Start (One Command!)
+-----
+
+### **Architecture**
+
+The platform is built on a microservices architecture, with Docker containers for each service. The system is composed of the following services:
+
+  * **Frontend**: A React application with Tailwind CSS that serves as the user interface.
+  * **Auth Service**: A FastAPI-based authentication service that handles user registration and login.
+  * **Telemetry Service**: A FastAPI service responsible for collecting and managing energy consumption data from devices.
+  * **AI Service**: A FastAPI service that integrates with OpenRouter to provide AI-powered energy insights and forecasting.
+  * **Database**: A PostgreSQL database for storing user data, device information, and telemetry data.
+
+-----
+
+### **Tech Stack**
+
+  * **Frontend**: React, Tailwind CSS
+  * **Backend**: FastAPI, Python
+  * **Database**: PostgreSQL
+  * **AI**: OpenRouter, Claude
+  * **Authentication**: JWT (JSON Web Tokens)
+  * **Containerization**: Docker, Docker Compose
+
+-----
+
+### **API Documentation**
+
+The API documentation for the backend services is available on SwaggerHub. You can access it through the following link:
+
+[https://app.swaggerhub.com/apis-docs/shem-a49/SHEM/1](https://app.swaggerhub.com/apis-docs/shem-a49/SHEM/1)
+
+-----
+
+### **Getting Started**
+
+1.  **Clone the repository**:
+
+    ```bash
+    git clone https://github.com/pipe1800/Smart-Home-Energy-Monitoring-with-Conversational-AI.git
+    cd Smart-Home-Energy-Monitoring-with-Conversational-AI
+    ```
+
+2.  **Configure Environment Variables**:
+    The project uses environment variables for configuration. You'll need to modify the `.env.example` file to be named `.env` as I have provided the openrouter API key there to make the testing easier.
+
+3.  **Run the setup script**:
+
+    ```bash
+    ./setup.sh
+    ```
+
+    This script builds the Docker containers, starts all services, and opens the application in your browser.
+
+-----
+
+### **Stopping the Application**
+
+To stop all running services, use the following command:
 
 ```bash
-# Clone the repository
-git clone https://github.com/pipe1800/Smart-Home-Energy-Monitoring-with-Conversational-AI.git
-cd Smart-Home-Energy-Monitoring-with-Conversational-AI
-
-# Run the automated setup (builds, starts everything, and opens browser)
-./setup.sh
-```
-
-The setup script will:
-- ✅ Configure environment variables
-- ✅ Build all Docker containers
-- ✅ Start backend services (database, auth, telemetry, AI)
-- ✅ Install frontend dependencies
-- ✅ Start the React development server
-- ✅ Wait for all services to be healthy
-- ✅ Automatically open your browser
-
-## 🛑 Stopping the Application
-
-```bash
-# Stop all services cleanly
 ./stop.sh
 ```
 
-## 📋 Prerequisites
+-----
 
-- Docker and Docker Compose installed
-- Node.js 18+ and npm
-- 8GB RAM minimum
-- Ports 3000, 8000-8002, and 5433 available
+### **Testing**
 
-## 🏗️ Architecture
+The project includes unit and integration tests for the backend services.
 
-- **Frontend**: React with Tailwind CSS (port 3000)
-- **Auth Service**: FastAPI authentication (port 8000)
-- **Telemetry Service**: FastAPI data collection (port 8001)
-- **AI Service**: FastAPI with OpenRouter integration (port 8002)
-- **Database**: PostgreSQL (port 5433)
+**Test Coverage**:
 
-## 🧪 Test Credentials
+  * **Auth Service**: Password hashing, JWT token management, user registration, login authentication, and rate limiting.
+  * **Telemetry Service**: Schedule validation, device management, telemetry data recording, and device ownership verification.
 
-After starting the services, you can create a new account or use:
-- **Email**: test@example.com
-- **Password**: testpassword123
+**Running Tests**:
 
-## 💡 Key Features
+  * To run all backend tests:
+    ```bash
+    cd backend && ./run_tests.sh
+    ```
+  * To run specific test suites:
+    ```bash
+    # Unit tests
+    python3 -m pytest auth-service/tests/test_auth.py telemetry-service/tests/test_telemetry.py -v
 
-- **Real-time Energy Dashboard** - Monitor consumption across all devices
-- **AI Assistant "Wat"** - Conversational AI for energy insights and forecasting
-- **Device Management** - Add, configure, and schedule smart home devices
-- **Consumption Forecasting** - Predict monthly costs based on usage patterns
-- **Cost Estimation** - Track spending and optimize energy usage
-- **Smart Scheduling** - Automated device scheduling for peak hour optimization
-
-## 🤖 Meet Wat - Your Energy Assistant
-
-Wat is your friendly AI energy assistant that can help you:
-- Analyze current energy consumption
-- Provide monthly cost projections
-- Suggest energy-saving strategies
-- Answer questions about device usage
-- Offer smart home automation tips
-
-Try asking Wat:
-- "Hello Wat, how's my energy usage today?"
-- "What will my monthly bill be?"
-- "Which device uses the most energy?"
-- "Give me some energy saving tips"
-
-## 🔧 Development Setup
-
-For development purposes:
-```bash
-# Install dependencies
-cd frontend && npm install
-
-# Run services individually
-docker-compose up db -d
-cd backend/auth-service && python main.py
-cd backend/telemetry-service && python main.py
-cd backend/ai-service && python main.py
-cd frontend && npm start
-```
-
-## 🛠️ Troubleshooting
-
-**Services won't start:**
-```bash
-# Check backend logs
-docker-compose logs -f [service_name]
-
-# Check frontend logs
-tail -f frontend.log
-```
-
-**Reset everything:**
-```bash
-# Stop all services
-./stop.sh
-
-# Clean up and restart
-docker-compose down -v
-./setup.sh
-```
-
-**Port conflicts:**
-```bash
-# Check what's using the ports
-lsof -i :3000
-lsof -i :8000-8002
-lsof -i :5433
-```
-
-**Frontend issues:**
-```bash
-# Manual frontend setup
-cd frontend
-npm install
-npm start
-```
-
-## 🔐 Security Note
-
-This project includes a demo API key in `.env.example` for testing convenience. In production:
-- Use your own OpenRouter API key
-- Implement proper key rotation
-- Use environment-specific configurations
-- Enable SSL/TLS encryption
-
-## 📊 Sample Data
-
-The application includes sample devices and schedules for demonstration:
-- Living Room AC
-- Kitchen Refrigerator  
-- Master Bedroom Light
-- Smart Thermostat
-- Home Office Outlet
-- Washing Machine
-
-## 🎯 Technical Highlights
-
-- **Microservices Architecture** with Docker containers
-- **JWT Authentication** with secure token management
-- **Real-time Data Processing** with PostgreSQL
-- **AI Integration** using OpenRouter and Claude
-- **Responsive Design** with Tailwind CSS
-- **RESTful APIs** with FastAPI
-- **Database Migrations** and health checks
-- **Rate Limiting** and error handling
+    # Integration tests
+    python3 -m pytest auth-service/tests/test_auth_integration.py telemetry-service/tests/test_telemetry_integration.py -v
+    ```
