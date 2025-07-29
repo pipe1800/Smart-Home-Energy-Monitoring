@@ -36,5 +36,4 @@ CREATE TABLE telemetry (
     PRIMARY KEY (timestamp, device_id)
 );
 
--- Index for performance
 CREATE INDEX idx_telemetry_device_id_timestamp ON telemetry (device_id, timestamp DESC);
