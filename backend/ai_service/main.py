@@ -172,14 +172,22 @@ async def handle_query(query: QueryRequest, current_user_email: str = Depends(ge
     
     # Build dynamic system prompt
     DYNAMIC_SYSTEM_PROMPT = f"""
-You are an AI energy assistant for a smart home monitoring system. You help users understand their energy usage and provide comprehensive advice about energy-related topics.
+You are Wat, a friendly and knowledgeable AI energy assistant for a smart home monitoring system. Your personality is warm, helpful, and enthusiastic about helping users understand and optimize their energy usage.
 
 IMPORTANT: You have access to the user's actual device data, historical usage, and schedules. 
 
 The user has the following devices:
 {device_info}
 
-When asked about monthly forecasts, projections, cost estimates, or anything about "monthly" consumption/costs, respond with:
+When responding to users:
+1. Always introduce yourself as Wat if it's a greeting or first interaction
+2. Be conversational and friendly while staying focused on energy-related topics
+3. For general conversation, energy questions, tips, or advice, use GENERAL_ADVICE
+4. Only use DATA_QUERY when the user specifically asks about their devices, usage, or costs
+
+Response formats:
+
+For monthly forecasts, projections, cost estimates, or anything about "monthly" consumption/costs:
 {{
     "intent_type": "DATA_QUERY",
     "data_query": {{
@@ -205,19 +213,22 @@ For data queries about specific devices, use their exact name from above:
     }}
 }}
 
-For any other energy-related questions, advice, or general conversation:
+For greetings, general energy conversation, tips, advice, or any non-specific queries:
 {{
     "intent_type": "GENERAL_ADVICE",
     "general_response": {{
         "response_type": "GENERAL",
-        "content": "Your comprehensive response here"
+        "content": "Your friendly, conversational response here"
     }}
 }}
 
 Remember:
-- For ANY question about monthly costs, forecasts, or projections, use DATA_QUERY with query_type: "SUM" and device_name: null
+- Greet users warmly and introduce yourself as Wat
+- Always be helpful and encouraging about energy savings
+- Use emojis sparingly to be friendly (⚡️ 💡 🌱 ♻️)
+- If users ask non-energy questions, gently redirect to energy topics
+- For ANY question about monthly costs, forecasts, or projections, use DATA_QUERY
 - Match device names exactly as shown above
-- Be helpful and conversational in GENERAL_ADVICE responses
 """
     
     try:
@@ -251,8 +262,8 @@ Remember:
 
     except (httpx.HTTPStatusError, json.JSONDecodeError, Exception) as e:
         traceback.print_exc()
-        # Fallback for parsing errors
-        if "monthly" in query.question.lower() or "forecast" in query.question.lower():
+        # Improved fallback for parsing errors
+        if "monthly" in query.question.lower() or "forecast" in query.question.lower() or "bill" in query.question.lower():
             # Force a monthly forecast query
             validated_llm_response = LLMResponse(
                 intent_type="DATA_QUERY",
@@ -262,14 +273,18 @@ Remember:
                 )
             )
         else:
-            return {
-                "summary": "I'm having trouble understanding your question.",
-                "content": "I apologize, but I'm having difficulty processing your request. You can ask me about:\n\n• Your device energy usage\n• Energy-saving tips\n• Monthly cost estimates\n• Best practices for efficiency\n• Peak hours and tariffs\n• And any other energy-related topics!\n\nPlease try rephrasing your question."
-            }
+            # Default to a friendly general response instead of an error
+            validated_llm_response = LLMResponse(
+                intent_type="GENERAL_ADVICE",
+                general_response=GeneralResponse(
+                    response_type="GENERAL",
+                    content="Hi there! I'm Wat, your friendly energy assistant! ⚡️ I'm here to help you understand and optimize your home's energy usage. You can ask me about:\n\n• Your current energy consumption\n• Monthly cost projections\n• Device-specific usage patterns\n• Energy-saving tips and tricks\n• Smart home automation ideas\n• Peak hours and rate optimization\n\nWhat would you like to know about your energy usage today?"
+                )
+            )
 
     if validated_llm_response.intent_type == "GENERAL_ADVICE":
         return {
-            "summary": "Energy Assistant",
+            "summary": "Wat - Your Energy Assistant",
             "content": validated_llm_response.general_response.content
         }
     

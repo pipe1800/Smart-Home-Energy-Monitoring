@@ -7,7 +7,7 @@ import { EnergyDashboard } from '../components/EnergyDashboard';
 import { DeviceManager } from '../components/DeviceManager';
 
 export const DashboardPage = () => {
-    const [messages, setMessages] = useState([{role: 'system', content: 'Welcome! How can I help you analyze your energy data?'}]);
+    const [messages, setMessages] = useState([{role: 'system', content: "Hi! I'm Wat, your personal energy assistant! ⚡️ I'm here to help you monitor and optimize your home's energy usage. How can I help you today?"}]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [showChat, setShowChat] = useState(false);
