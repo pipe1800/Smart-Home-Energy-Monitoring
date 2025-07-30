@@ -1,0 +1,47 @@
+Auth
+curl -X POST http://localhost:8000/auth/login \  -H "Content-Type: application/x-www-form-urlencoded" \  -d "username=test2@gmail.com&password=test123"
+
+Collecting workspace informationLooking at your codebase, I can see that your services are running in Docker containers with specific port mappings. Based on your docker-compose.yml file, here's how the services are mapped:
+
+- **Auth Service**: Internal port 8000 → External port 8000
+- **Telemetry Service**: Internal port 8000 → External port 8001  
+- **AI Service**: Internal port 8000 → External port 8002
+
+The issue is that your services are running on their internal port 8000, but are exposed on different external ports. When using curl, you need to use the external ports.
+
+Here are the correct curl commands for each service:
+
+
+# Register
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test10@gmail.com", "password": "test123456"}'
+
+# Login
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=test2@gmail.com&password=test123456"
+
+# Get devices (requires auth token)
+curl -X GET http://localhost:8001/devices \
+  -H "Authorization: Bearer YOUR_TOKEN_HERE"
+
+# Create device
+curl -X POST http://localhost:8001/devices \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN_HERE" \
+  -d '{"name": "Test Device", "type": "appliance", "room": "living_room", "power_rating": 1.5}'
+
+# Check status
+curl http://localhost:8002/ai
+
+# Query AI (requires auth token)
+curl -X POST http://localhost:8002/ai/query \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN_HERE" \
+  -d '{"question": "What is my current energy usage?"}'
+
+# Check if services are responding
+curl http://localhost:8000/auth
+curl http://localhost:8001/
+curl http://localhost:8002/ai

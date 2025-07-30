@@ -148,6 +148,9 @@ export const ConsumptionTimeline = () => {
                         stroke="#9CA3AF"
                         fontSize={12}
                         tickFormatter={(value) => `${value} kWh`}
+                        domain={['dataMin', 'dataMax']}
+                        allowDataOverflow={false}
+                        scale="linear"
                     />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend 

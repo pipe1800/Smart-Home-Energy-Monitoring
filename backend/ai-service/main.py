@@ -62,7 +62,7 @@ def get_user_data(user_email):
             
             cur.execute("""
                 SELECT 
-                    COALESCE(SUM(CASE WHEN t.timestamp >= CURRENT_DATE THEN t.energy_usage ELSE 0 END), 0) as today_kwh,
+                    COALESCE(SUM(CASE WHEN t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours' THEN t.energy_usage ELSE 0 END), 0) as today_kwh,
                     COALESCE(SUM(CASE WHEN t.timestamp >= DATE_TRUNC('week', CURRENT_DATE) THEN t.energy_usage ELSE 0 END), 0) as week_kwh,
                     COALESCE(SUM(CASE WHEN t.timestamp >= DATE_TRUNC('month', CURRENT_DATE) THEN t.energy_usage ELSE 0 END), 0) as month_kwh
                 FROM telemetry t
@@ -78,7 +78,7 @@ def get_user_data(user_email):
                 FROM telemetry t
                 JOIN devices d ON t.device_id = d.id
                 WHERE d.user_id = %s
-                AND t.timestamp >= NOW() - INTERVAL '24 hours'
+                AND t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
                 GROUP BY hour
                 ORDER BY hour
             """, (user_id,))
@@ -243,12 +243,12 @@ async def get_consumption_timeline(
             user_id = user_result[0]
             
             time_format = {
-                "daily": ("hour", "30 days"),
-                "weekly": ("day", "12 weeks"),
-                "monthly": ("day", "12 months")
+                "daily": ("day", "15 days", "15 days"),  # Changed from 'hour' to 'day'
+                "weekly": ("week", "12 weeks", "4 weeks"),  # Changed from 'day' to 'week'
+                "monthly": ("month", "12 months", "3 months")  # Changed from 'day' to 'month'
             }
             
-            bucket, interval = time_format[view]
+            bucket, past_interval, future_interval = time_format[view]
             
             cur.execute(f"""
                 SELECT 
@@ -257,7 +257,7 @@ async def get_consumption_timeline(
                 FROM telemetry t
                 JOIN devices d ON t.device_id = d.id
                 WHERE d.user_id = %s
-                AND t.timestamp >= NOW() - INTERVAL '{interval}'
+                AND t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '{past_interval}'
                 GROUP BY time_bucket
                 ORDER BY time_bucket
             """, (user_id,))
@@ -281,23 +281,24 @@ async def get_consumption_timeline(
             forecast_data = []
             
             if view == "daily":
-                for days_ahead in range(7):
-                    for hour in range(24):
-                        future_datetime = now + timedelta(days=days_ahead, hours=hour)
-                        day_of_week = (future_datetime.weekday() + 1) % 7
-                        
-                        hourly_usage = 0
-                        for sched_day, start, end, power in schedules:
-                            if sched_day == day_of_week and start <= hour < end:
-                                hourly_usage += power
-                        
-                        if days_ahead > 0 or hour > now.hour:
-                            forecast_data.append({
-                                "timestamp": future_datetime.isoformat(),
-                                "usage": hourly_usage,
-                                "is_forecast": True
-                            })
+                # Show 15 days into the future
+                for days_ahead in range(1, 16):  # Next 15 days
+                    daily_usage = 0
+                    future_date = now + timedelta(days=days_ahead)
+                    day_of_week = (future_date.weekday() + 1) % 7
+                    
+                    # Calculate daily usage based on schedules
+                    for sched_day, start, end, power in schedules:
+                        if sched_day == day_of_week:
+                            daily_usage += (end - start) * power
+                    
+                    forecast_data.append({
+                        "timestamp": future_date.replace(hour=12).isoformat(),  # Noon of each day
+                        "usage": daily_usage,
+                        "is_forecast": True
+                    })
             elif view == "weekly":
+                # Show 4 weeks into the future
                 for weeks_ahead in range(1, 5):
                     future_date = now + timedelta(weeks=weeks_ahead)
                     week_usage = 0
@@ -316,6 +317,7 @@ async def get_consumption_timeline(
                         "is_forecast": True
                     })
             else:
+                # Show 3 months into the future
                 for months_ahead in range(1, 4):
                     future_date = now + timedelta(days=30 * months_ahead)
                     monthly_usage = 0

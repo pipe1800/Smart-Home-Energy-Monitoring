@@ -36,11 +36,11 @@ export const EnergyDashboard = ({ data, onRefresh }) => {
                     <p className="text-xs text-gray-500 mt-1">Real-time power consumption</p>
                 </div>
                 <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-                    <h3 className="text-sm font-medium text-gray-400">Today's Total</h3>
+                    <h3 className="text-sm font-medium text-gray-400">Today's Usage</h3>
                     <p className="mt-2 text-3xl font-bold text-green-400">
                         {data.today_total.toFixed(2)} kWh
                     </p>
-                    <p className="text-xs text-gray-500 mt-1">Since midnight</p>
+                    <p className="text-xs text-gray-500 mt-1">Last 24 hours</p>
                 </div>
                 <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
                     <h3 className="text-sm font-medium text-gray-400">Monthly Cost</h3>

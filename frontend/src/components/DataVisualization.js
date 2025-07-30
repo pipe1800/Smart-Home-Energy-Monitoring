@@ -36,11 +36,19 @@ export const DataVisualization = ({ data }) => {
                     <BarChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#4A5568" />
                         <XAxis dataKey="time" stroke="#A0AEC0" fontSize={10} angle={-45} textAnchor="end" height={60} />
-                        <YAxis stroke="#A0AEC0" fontSize={10} />
+                        <YAxis 
+                            stroke="#A0AEC0" 
+                            fontSize={10}
+                            domain={[0, 5]}
+                            ticks={[0, 1, 2, 3, 4, 5]}
+                            tickFormatter={(value) => `${value} kWh`}
+                            allowDataOverflow={false}
+                            scale="linear"
+                        />
                         <Tooltip 
                             contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} 
                             cursor={{fill: 'rgba(128, 128, 128, 0.2)'}}
-                            formatter={(value) => `${value.toFixed(2)} kW`}
+                            formatter={(value) => `${value.toFixed(2)} kWh`}
                         />
                         <Bar dataKey="usage" fill="#667EEA" />
                     </BarChart>
